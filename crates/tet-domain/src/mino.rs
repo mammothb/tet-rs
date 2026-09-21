@@ -48,6 +48,19 @@ impl MinoType {
     }
 
     #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            MinoType::J => "J",
+            MinoType::L => "L",
+            MinoType::S => "S",
+            MinoType::Z => "Z",
+            MinoType::T => "T",
+            MinoType::I => "I",
+            MinoType::O => "O",
+        }
+    }
+
+    #[must_use]
     pub fn coords(self, orientation: Orientation) -> &'static [Vec2; 4] {
         &self.mino().coords[orientation as usize]
     }

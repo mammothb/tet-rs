@@ -8,7 +8,8 @@ rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.depencencies]
-
+# dev depencencies
+rstest = { version = "0.27.0" }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -2 }

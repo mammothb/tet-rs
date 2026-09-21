@@ -85,10 +85,19 @@ pub enum Cell {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(i8)]
 pub enum Rotation {
-    CW = 1,
-    CCW = -1,
+    CW,
+    CCW,
+}
+
+impl Rotation {
+    #[must_use]
+    pub const fn sign(self) -> i8 {
+        match self {
+            Self::CW => 1,
+            Self::CCW => -1,
+        }
+    }
 }
 
 impl Neg for Rotation {
