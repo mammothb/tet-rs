@@ -147,13 +147,13 @@ mod test {
 
     // -------- collides --------
 
-    #[test]
+    #[rstest]
     fn collides_empty_cells_no_collision() {
         let b = empty_board(10, 20);
         assert!(!b.collides(&[Vec2::new(3, 5), Vec2::new(4, 5)]));
     }
 
-    #[test]
+    #[rstest]
     fn collides_occupied_cell() {
         let mut b = empty_board(10, 20);
         b.set(Vec2::new(3, 5), Cell::Block(MinoType::I));
@@ -170,7 +170,7 @@ mod test {
         assert!(b.collides(&[p]));
     }
 
-    #[test]
+    #[rstest]
     fn collides_any_one_oob_means_collision() {
         let b = empty_board(10, 20);
         assert!(b.collides(&[Vec2::new(3, 5), Vec2::new(-1, 5)]));
@@ -178,20 +178,20 @@ mod test {
 
     // -------- full_rows --------
 
-    #[test]
+    #[rstest]
     fn full_rows_empty_board_yields_nothing() {
         let b = empty_board(10, 20);
         assert_eq!(b.full_rows().count(), 0);
     }
 
-    #[test]
+    #[rstest]
     fn full_rows_partial_row_yields_nothing() {
         let mut b = empty_board(10, 20);
         b.set(Vec2::new(3, 5), Cell::Block(MinoType::T));
         assert_eq!(b.full_rows().count(), 0);
     }
 
-    #[test]
+    #[rstest]
     fn full_rows_garbage_only_counts_as_full() {
         let mut b = empty_board(10, 20);
         for x in 0..10 {
@@ -200,7 +200,7 @@ mod test {
         assert_eq!(b.full_rows().collect::<Vec<_>>(), vec![5]);
     }
 
-    #[test]
+    #[rstest]
     fn full_rows_mixed_block_and_garbage_counts_as_full() {
         let mut b = empty_board(10, 20);
         for x in 0..5 {
@@ -212,7 +212,7 @@ mod test {
         assert_eq!(b.full_rows().collect::<Vec<_>>(), vec![5]);
     }
 
-    #[test]
+    #[rstest]
     fn full_rows_multiple_yields_all() {
         let mut b = empty_board(10, 20);
         for x in 0..10 {
@@ -226,7 +226,7 @@ mod test {
 
     // -------- clear_rows --------
 
-    #[test]
+    #[rstest]
     fn clear_rows_unsorted_input_still_clears() {
         let mut b = empty_board(10, 20);
         for x in 0..10 {
@@ -238,7 +238,7 @@ mod test {
         assert_eq!(b.grid.len(), 20);
     }
 
-    #[test]
+    #[rstest]
     fn clear_rows_duplicates_dont_panic_or_grow_board() {
         let mut b = empty_board(10, 20);
         for x in 0..10 {
@@ -249,7 +249,7 @@ mod test {
         assert_eq!(b.grid.len(), 20);
     }
 
-    #[test]
+    #[rstest]
     fn clear_rows_empty_is_noop() {
         let mut b = empty_board(10, 20);
         b.set(Vec2::new(3, 5), Cell::Block(MinoType::T));
@@ -260,7 +260,7 @@ mod test {
 
     // -------- insert_garbage --------
 
-    #[test]
+    #[rstest]
     fn insert_garbage_zero_is_noop() {
         let mut b = empty_board(10, 20);
         b.set(Vec2::new(3, 5), Cell::Block(MinoType::T));
@@ -269,7 +269,7 @@ mod test {
         assert_eq!(b.get(Vec2::new(3, 5)), Cell::Block(MinoType::T));
     }
 
-    #[test]
+    #[rstest]
     fn insert_garbage_shifts_existing_rows_up() {
         let mut b = empty_board(10, 20);
         b.set(Vec2::new(3, 5), Cell::Block(MinoType::T));
@@ -279,7 +279,7 @@ mod test {
         assert_eq!(b.grid.len(), 20);
     }
 
-    #[test]
+    #[rstest]
     fn insert_garbage_hole_at_correct_column() {
         let mut b = empty_board(10, 20);
         b.insert_garbage(1, 4);
@@ -289,7 +289,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[rstest]
     fn insert_garbage_caps_at_height_when_count_exceeds() {
         let mut b = empty_board(10, 5);
         b.set(Vec2::new(3, 4), Cell::Block(MinoType::T));
@@ -300,7 +300,7 @@ mod test {
         assert_eq!(b.grid.len(), 5);
     }
 
-    #[test]
+    #[rstest]
     #[should_panic(expected = "hole column")]
     fn insert_garbage_hole_out_of_bounds_panics() {
         let mut b = empty_board(10, 20);
