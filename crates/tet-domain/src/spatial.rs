@@ -184,7 +184,7 @@ mod test {
 
     // -------- Cell --------
 
-    #[test]
+    #[rstest]
     fn cell_default_is_empty() {
         assert_eq!(Cell::default(), Cell::Empty);
     }
@@ -232,13 +232,13 @@ mod test {
         assert_eq!(got, expected);
     }
 
-    #[test]
+    #[rstest]
     fn v2_macro_array() {
         let arr: [Vec2; 3] = v2![[0, 1], [1, 2], [2, 3]];
         assert_eq!(arr, [Vec2::new(0, 1), Vec2::new(1, 2), Vec2::new(2, 3)]);
     }
 
-    #[test]
+    #[rstest]
     fn v2_macro_array_trailing_comma() {
         let arr: [Vec2; 3] = v2![[0, 1], [1, 2], [2, 3],];
         assert_eq!(arr, [Vec2::new(0, 1), Vec2::new(1, 2), Vec2::new(2, 3)]);
