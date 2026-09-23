@@ -5,7 +5,7 @@ pub mod orientation;
 pub mod ruleset;
 pub mod spatial;
 
-pub use bag::Bag;
+pub use bag::{Bag, Queue, Rng};
 pub use board::Board;
 pub use mino::MinoType;
 pub use orientation::Orientation;

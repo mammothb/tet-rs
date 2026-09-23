@@ -34,6 +34,18 @@ pub enum MinoType {
 }
 
 impl MinoType {
+    pub const SIZE: usize = 7;
+
+    pub const ALL: [MinoType; MinoType::SIZE] = [
+        MinoType::I,
+        MinoType::O,
+        MinoType::T,
+        MinoType::L,
+        MinoType::J,
+        MinoType::S,
+        MinoType::Z,
+    ];
+
     #[must_use]
     pub const fn mino(self) -> &'static Mino {
         match self {

@@ -1,25 +1,12 @@
-use std::collections::VecDeque;
-
 use crate::MinoType;
 
 pub trait Rng {
     fn next_u32(&mut self) -> u32;
 }
 
-const BAG_SIZE: usize = 7;
-const ALL_PIECES: [MinoType; BAG_SIZE] = [
-    MinoType::I,
-    MinoType::O,
-    MinoType::T,
-    MinoType::L,
-    MinoType::J,
-    MinoType::S,
-    MinoType::Z,
-];
-
 #[derive(Debug)]
 pub struct Bag<R: Rng> {
-    pieces: [MinoType; BAG_SIZE],
+    pieces: [MinoType; MinoType::SIZE],
     idx: u8,
     rng: R,
 }
@@ -27,7 +14,7 @@ pub struct Bag<R: Rng> {
 impl<R: Rng> Bag<R> {
     pub fn new(rng: R) -> Self {
         let mut rng = rng;
-        let mut pieces = ALL_PIECES;
+        let mut pieces = MinoType::ALL;
         shuffle(&mut pieces, &mut rng);
         Self {
             pieces,
@@ -39,8 +26,8 @@ impl<R: Rng> Bag<R> {
     pub fn take(&mut self) -> MinoType {
         let p = self.pieces[self.idx as usize];
         self.idx += 1;
-        if self.idx as usize == BAG_SIZE {
-            self.pieces = ALL_PIECES;
+        if self.idx as usize == MinoType::SIZE {
+            self.pieces = MinoType::ALL;
             shuffle(&mut self.pieces, &mut self.rng);
             self.idx = 0;
         }
