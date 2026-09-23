@@ -21,25 +21,25 @@ impl Ruleset {
 
     #[must_use]
     #[inline]
-    pub fn mino(&self, typ: MinoType) -> &'static Mino {
-        typ.mino()
+    pub fn mino(&self, kind: MinoType) -> &'static Mino {
+        kind.mino()
     }
 
     #[must_use]
     #[inline]
-    pub fn coords(&self, typ: MinoType, orientation: Orientation) -> &'static [Vec2; 4] {
-        typ.coords(orientation)
+    pub fn coords(&self, kind: MinoType, orientation: Orientation) -> &'static [Vec2; 4] {
+        kind.coords(orientation)
     }
 
     #[must_use]
     #[inline]
-    pub fn origin(&self, typ: MinoType) -> Vec2 {
-        typ.origin()
+    pub fn origin(&self, kind: MinoType) -> Vec2 {
+        kind.origin()
     }
 
     #[must_use]
     #[inline]
-    pub fn kicks(&self, typ: MinoType, target: Orientation, rot: Rotation) -> &'static [Vec2] {
-        typ.mino().kicks(target, rot)
+    pub fn kicks(&self, kind: MinoType, target: Orientation, rot: Rotation) -> &'static [Vec2] {
+        kind.mino().kicks(target, rot)
     }
 }
