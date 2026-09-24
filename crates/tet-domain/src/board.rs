@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use crate::{Cell, Vec2};
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct Board {
     grid: VecDeque<Vec<Cell>>,
     num_cols: u8,
