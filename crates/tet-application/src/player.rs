@@ -2,7 +2,7 @@ use tet_domain::{Board, MinoType, Queue, Rng};
 
 use crate::{Piece, ports::bot::BotTransport};
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Phase {
     Playing,
     GameOver,
