@@ -28,6 +28,7 @@ pub struct Player<R: Rng> {
     pub current: Piece,
     pub queue: Queue<R>,
     pub hold: Option<MinoType>,
+    pub hold_used: bool, // true after a hold swap; reset on next spawn-from-queue
     pub score: i32,
     pub lines: u32,
     pub combo: i32,

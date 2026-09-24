@@ -31,7 +31,7 @@ pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickRes
     } else {
         player.lock_delay += 1;
         if player.lock_delay >= LOCK_DELAY_FRAMES {
-            result = try_lock(player, ruleset);
+            result = try_lock(player);
             cancel_pending_garbage(player, result.lines_cleared);
             update_score(player, &result, ruleset);
             spawn_next_piece(player);
@@ -99,7 +99,7 @@ pub fn apply_rotation_input<R: Rng>(
     false
 }
 
-pub fn try_lock<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickResult {
+pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
     let tspin = detect_tspin(player);
     for cell in player.current.cells() {
         player.board.set(cell, Cell::Block(player.current.kind));
@@ -133,6 +133,7 @@ pub fn cancel_pending_garbage<R: Rng>(player: &mut Player<R>, mut to_cancel: u8)
 pub fn spawn_next_piece<R: Rng>(player: &mut Player<R>) {
     let kind = player.queue.take();
     player.current = Piece::spawn(kind);
+    player.hold_used = false;
     if player
         .board
         .collides(&player.current.cells().collect::<Vec<_>>())
@@ -157,6 +158,42 @@ pub fn check_topout<R: Rng>(player: &Player<R>) -> bool {
     player
         .board
         .collides(&player.current.cells().collect::<Vec<_>>())
+}
+
+pub fn hard_drop<R: Rng>(player: &mut Player<R>) -> TickResult {
+    player.current.pos = project_ghost(player);
+    try_lock(player)
+}
+
+pub fn soft_drop<R: Rng>(player: &mut Player<R>) -> bool {
+    step_gravity(player)
+}
+
+pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
+    if player.hold_used {
+        return false;
+    }
+    let current_kind = player.current.kind;
+    let new_kind = match player.hold {
+        None => {
+            player.hold = Some(current_kind);
+            player.queue.take()
+        }
+        Some(held) => {
+            player.hold = Some(current_kind);
+            held
+        }
+    };
+    player.current = Piece::spawn(new_kind);
+    player.lock_delay = 0;
+    player.hold_used = true;
+    if player
+        .board
+        .collides(&player.current.cells().collect::<Vec<_>>())
+    {
+        player.phase = Phase::GameOver;
+    }
+    true
 }
 
 fn detect_tspin<R: Rng>(player: &Player<R>) -> TSpinStatus {
