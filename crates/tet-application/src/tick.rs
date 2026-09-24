@@ -99,13 +99,16 @@ pub fn apply_rotation_input<R: Rng>(
     false
 }
 
+/// # Panics
+///
+/// Number of full rows exceed u8 limit
 pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
     let tspin = detect_tspin(player);
     for cell in player.current.cells() {
         player.board.set(cell, Cell::Block(player.current.kind));
     }
     let full: Vec<u8> = player.board.full_rows().collect();
-    let lines_cleared = full.len() as u8;
+    let lines_cleared = u8::try_from(full.len()).expect("at most 4 lines clear per move");
     player.board.clear_rows(&full);
 
     TickResult {
@@ -241,7 +244,7 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
         return;
     }
 
-    player.lines += lines as u32;
+    player.lines += u32::from(lines);
 
     // Base points per line clear.
     let base = match lines {
@@ -255,8 +258,8 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
     // T-spin bonus.
     let tspin_bonus = match result.tspin {
         TSpinStatus::None => 0,
-        TSpinStatus::Mini => 200 * lines as i32,
-        TSpinStatus::Full => 400 * lines as i32,
+        TSpinStatus::Mini => 200 * i32::from(lines),
+        TSpinStatus::Full => 400 * i32::from(lines),
     };
 
     // Back-to-back: +50% of base on a difficult clear following a difficult one.
@@ -273,6 +276,6 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
     // Combo: +50 per consecutive clear (starting from the 2nd).
     player.combo += 1;
     if player.combo >= 2 {
-        player.score += 50 * (player.combo - 1) as i32;
+        player.score += 50 * (player.combo - 1);
     }
 }
