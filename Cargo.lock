@@ -235,6 +235,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tet-application"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "tet-domain",
+]
+
+[[package]]
 name = "tet-domain"
 version = "0.1.0"
 dependencies = [
