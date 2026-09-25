@@ -2,7 +2,7 @@ use tet_domain::{Cell, MinoType, Orientation, Rng, Rotation, Ruleset, Vec2, v2};
 
 use crate::{LOCK_DELAY_FRAMES, Phase, Piece, Player};
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum TSpinStatus {
     #[default]
     None,
@@ -10,7 +10,7 @@ pub enum TSpinStatus {
     Full,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct TickResult {
     pub lines_cleared: u8,
     pub tspin: TSpinStatus,

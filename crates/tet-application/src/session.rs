@@ -224,3 +224,360 @@ fn apply_bot_move<R: Rng>(player: &mut Player<R>, mv: Move, ruleset: &Ruleset) -
     player.current.pos = orig_pos;
     None
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use rstest::rstest;
+
+    use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
+
+    use crate::PendingGarbage;
+    use crate::player::{Controller, Player};
+    use crate::ports::bot::{BotError, Move, PieceLocation, Spin};
+
+    /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
+    struct StubRng {
+        values: Vec<u32>,
+        idx: usize,
+    }
+
+    impl StubRng {
+        fn counter() -> Self {
+            Self {
+                values: (1..=1000).collect(),
+                idx: 0,
+            }
+        }
+    }
+
+    impl Rng for StubRng {
+        fn next_u32(&mut self) -> u32 {
+            let v = self.values[self.idx % self.values.len()];
+            self.idx += 1;
+            v
+        }
+    }
+
+    /// Stub bot that returns preconfigured moves and counts calls.
+    struct StubBot {
+        moves: Vec<Move>,
+        updates: usize,
+        suggests: usize,
+        stops: usize,
+        fail_suggest: bool,
+    }
+
+    impl StubBot {
+        fn new(moves: Vec<Move>) -> Self {
+            Self {
+                moves,
+                updates: 0,
+                suggests: 0,
+                stops: 0,
+                fail_suggest: false,
+            }
+        }
+        fn empty() -> Self {
+            Self::new(Vec::new())
+        }
+        fn fail() -> Self {
+            Self {
+                moves: Vec::new(),
+                updates: 0,
+                suggests: 0,
+                stops: 0,
+                fail_suggest: true,
+            }
+        }
+    }
+
+    impl BotTransport for StubBot {
+        fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
+            Ok(())
+        }
+        fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
+            self.updates += 1;
+            Ok(())
+        }
+        fn suggest(&mut self) -> Result<Vec<Move>, BotError> {
+            self.suggests += 1;
+            if self.fail_suggest {
+                Err(BotError::Exited)
+            } else {
+                Ok(std::mem::take(&mut self.moves))
+            }
+        }
+        fn stop(&mut self) {
+            self.stops += 1;
+        }
+    }
+
+    fn empty_player() -> Player<StubRng> {
+        Player {
+            board: Board::new(10, 25),
+            current: Piece::spawn(MinoType::T),
+            queue: Queue::new(StubRng::counter(), 5),
+            hold: None,
+            hold_used: false,
+            score: 0,
+            lines: 0,
+            combo: 0,
+            b2b: false,
+            lock_delay: 0,
+            phase: Phase::Playing,
+            controller: Controller::Bot(Box::new(StubBot::empty())),
+            pending_garbage: Vec::new(),
+            attack_rng: StubRng::counter(),
+        }
+    }
+
+    fn t_session() -> GameSession<StubRng> {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session
+    }
+
+    // -------- new / add_player / frame counter --------
+
+    #[rstest]
+    fn new_session_has_no_players_and_zero_frame() {
+        let session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        assert_eq!(session.players.len(), 0);
+        assert_eq!(session.frame, 0);
+    }
+
+    #[rstest]
+    fn add_player_returns_sequential_indices() {
+        let mut session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        assert_eq!(session.add_player(empty_player()), 0);
+        assert_eq!(session.add_player(empty_player()), 1);
+        assert_eq!(session.add_player(empty_player()), 2);
+        assert_eq!(session.players.len(), 3);
+    }
+
+    #[rstest]
+    fn step_frame_increments_frame_counter() {
+        let mut session = t_session();
+        assert_eq!(session.frame, 0);
+        session.step_frame();
+        assert_eq!(session.frame, 1);
+        session.step_frame();
+        assert_eq!(session.frame, 2);
+    }
+
+    // -------- step_frame: pending garbage --------
+
+    #[rstest]
+    fn step_frame_decrements_pending_garbage_delay() {
+        let mut session = t_session();
+        session.players[0].pending_garbage.push(PendingGarbage {
+            count: 2,
+            hole: 5,
+            delay_remaining: 5,
+        });
+        session.step_frame();
+        assert_eq!(session.players[0].pending_garbage[0].delay_remaining, 4);
+        assert_eq!(session.players[0].pending_garbage.len(), 1);
+    }
+
+    #[rstest]
+    fn step_frame_inserts_garbage_when_delay_hits_zero() {
+        let mut session = t_session();
+        session.players[0].pending_garbage.push(PendingGarbage {
+            count: 1,
+            hole: 0,
+            delay_remaining: 1,
+        });
+        session.step_frame();
+        // Pending drained
+        assert!(session.players[0].pending_garbage.is_empty());
+        // Board has garbage with hole at col 0
+        assert_eq!(session.players[0].board.get(v2![0, 0]), Cell::Empty);
+        assert_eq!(session.players[0].board.get(v2![1, 0]), Cell::Garbage);
+    }
+
+    #[rstest]
+    fn step_frame_advances_lock_delay_when_piece_cant_move_down() {
+        let mut session = t_session();
+        // T-piece bbox at pos.y = -1 places cells at world y=0,0,0,1.
+        // Stepping down would put them at y=-1 (OOB).
+        session.players[0].current.pos = v2![3, -1];
+        session.step_frame();
+        assert_eq!(session.players[0].lock_delay, 1);
+    }
+
+    #[rstest]
+    fn step_frame_skips_game_over_players() {
+        let mut session = t_session();
+        session.players[0].phase = Phase::GameOver;
+        let initial_frame = session.frame;
+        session.step_frame();
+        assert_eq!(session.frame, initial_frame + 1);
+        // Player's lock_delay was 0; stays 0 (skipped)
+        assert_eq!(session.players[0].lock_delay, 0);
+    }
+
+    // -------- snapshot --------
+
+    #[rstest]
+    fn snapshot_captures_combo_and_b2b() {
+        let mut session = t_session();
+        session.players[0].combo = 3;
+        session.players[0].b2b = true;
+        let snap = session.snapshot(0);
+        assert_eq!(snap.combo, 3);
+        assert!(snap.b2b);
+    }
+
+    #[rstest]
+    fn snapshot_clones_board_so_session_changes_dont_leak() {
+        let mut session = t_session();
+        let snap = session.snapshot(0);
+        session.players[0]
+            .board
+            .set(v2![3, 5], Cell::Block(MinoType::T));
+        assert_eq!(snap.board.get(v2![3, 5]), Cell::Empty);
+    }
+
+    #[rstest]
+    fn snapshot_captures_pending_garbage() {
+        let mut session = t_session();
+        session.players[0].pending_garbage.push(PendingGarbage {
+            count: 4,
+            hole: 7,
+            delay_remaining: 6,
+        });
+        let snap = session.snapshot(0);
+        assert_eq!(snap.pending_garbage.len(), 1);
+        assert_eq!(snap.pending_garbage[0].count, 4);
+        assert_eq!(snap.pending_garbage[0].hole, 7);
+        assert_eq!(snap.pending_garbage[0].delay_remaining, 6);
+    }
+
+    // -------- is_finished --------
+
+    #[rstest]
+    fn is_finished_false_when_any_player_still_playing() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        session.players[0].phase = Phase::GameOver;
+        assert!(!session.is_finished());
+    }
+
+    #[rstest]
+    fn is_finished_true_when_all_players_game_over() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        session.players[0].phase = Phase::GameOver;
+        session.players[1].phase = Phase::GameOver;
+        assert!(session.is_finished());
+    }
+
+    // -------- apply_input --------
+
+    #[rstest]
+    fn apply_input_none_returns_none_and_no_change() {
+        let mut session = t_session();
+        let original_pos = session.players[0].current.pos;
+        let result = session.apply_input(0, Input::None);
+        assert!(result.is_none());
+        assert_eq!(session.players[0].current.pos, original_pos);
+    }
+
+    #[rstest]
+    fn apply_input_move_left_shifts_piece_left() {
+        let mut session = t_session();
+        let original_pos = session.players[0].current.pos;
+        let result = session.apply_input(0, Input::MoveLeft);
+        assert!(result.is_none());
+        assert_eq!(session.players[0].current.pos, original_pos + v2![-1, 0]);
+    }
+
+    #[rstest]
+    fn apply_input_rotate_cw_advances_orientation() {
+        let mut session = t_session();
+        let _ = session.apply_input(0, Input::RotateCW);
+        assert_eq!(session.players[0].current.orientation, Orientation::East);
+    }
+
+    #[rstest]
+    fn apply_input_hold_with_empty_hold_pulls_from_queue() {
+        let mut session = t_session();
+        assert!(session.players[0].hold.is_none());
+        let result = session.apply_input(0, Input::Hold);
+        assert!(result.is_none());
+        assert!(session.players[0].hold.is_some());
+        assert!(session.players[0].hold_used);
+    }
+
+    #[rstest]
+    fn apply_input_hold_fails_when_already_used() {
+        let mut session = t_session();
+        session.players[0].hold_used = true;
+        let result = session.apply_input(0, Input::Hold);
+        assert!(result.is_none());
+        // hold stays empty — try_hold returns false on already-used
+        assert!(session.players[0].hold.is_none());
+    }
+
+    #[rstest]
+    fn apply_input_hard_drop_returns_some_with_piece_locked() {
+        let mut session = t_session();
+        let result = session.apply_input(0, Input::HardDrop);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert!(result.piece_locked);
+    }
+
+    #[rstest]
+    fn apply_input_on_game_over_player_returns_none() {
+        let mut session = t_session();
+        session.players[0].phase = Phase::GameOver;
+        let result = session.apply_input(0, Input::MoveLeft);
+        assert!(result.is_none());
+    }
+
+    // -------- step_bot --------
+
+    #[rstest]
+    fn step_bot_calls_update_then_suggest() {
+        let mut session = t_session();
+        let mut bot = StubBot::empty();
+        session.step_bot(0, &mut bot);
+        assert_eq!(bot.updates, 1);
+        assert_eq!(bot.suggests, 1);
+    }
+
+    #[rstest]
+    fn step_bot_with_failing_suggest_returns_silently() {
+        let mut session = t_session();
+        let mut bot = StubBot::fail();
+        // Should not panic; just returns.
+        session.step_bot(0, &mut bot);
+        assert_eq!(bot.updates, 1);
+        assert_eq!(bot.suggests, 1);
+    }
+
+    #[rstest]
+    fn step_bot_applies_first_valid_move() {
+        let mut session = t_session();
+        // Bot suggests a move that's a no-op (same orientation, valid position).
+        let mv = Move {
+            location: PieceLocation {
+                kind: MinoType::T,
+                orientation: Orientation::North,
+                x: 3,
+                y: 19,
+            },
+            spin: Spin::None,
+        };
+        let mut bot = StubBot::new(vec![mv]);
+        session.step_bot(0, &mut bot);
+        // Move was consumed (Vec was moved out)
+        assert_eq!(bot.suggests, 1);
+    }
+}
