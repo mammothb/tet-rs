@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use crate::{Cell, Vec2};
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct Board {
     grid: VecDeque<Vec<Cell>>,
     num_cols: u8,
@@ -11,6 +11,18 @@ pub struct Board {
 }
 
 impl Board {
+    /// Construct an empty board of the given dimensions. All cells are `Empty`.
+    #[must_use]
+    pub fn new(num_cols: u8, num_rows: u8) -> Self {
+        Self {
+            grid: std::iter::repeat_with(|| vec![Cell::Empty; num_cols as usize])
+                .take(num_rows as usize)
+                .collect(),
+            num_cols,
+            num_rows,
+        }
+    }
+
     #[must_use]
     pub fn get(&self, p: Vec2) -> Cell {
         let (Ok(x), Ok(y)) = (usize::try_from(p.x), usize::try_from(p.y)) else {

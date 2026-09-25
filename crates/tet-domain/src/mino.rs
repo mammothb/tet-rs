@@ -72,6 +72,25 @@ impl MinoType {
         }
     }
 
+    #[allow(clippy::match_same_arms)]
+    #[must_use]
+    pub const fn rotation_center_offset(kind: MinoType, orientation: Orientation) -> Vec2 {
+        match (kind, orientation as u8) {
+            (MinoType::J | MinoType::L | MinoType::S | MinoType::Z | MinoType::T, _) => {
+                Vec2::new(1, 1)
+            }
+            (MinoType::O, 0) => Vec2::new(1, 1),
+            (MinoType::O, 1) => Vec2::new(1, 2),
+            (MinoType::O, 2) => Vec2::new(2, 2),
+            (MinoType::O, 3) => Vec2::new(1, 1),
+            (MinoType::I, 0) => Vec2::new(0, 1),
+            (MinoType::I, 1) => Vec2::new(1, 2),
+            (MinoType::I, 2) => Vec2::new(2, 1),
+            (MinoType::I, 3) => Vec2::new(1, 0),
+            _ => unreachable!(),
+        }
+    }
+
     #[must_use]
     pub fn coords(self, orientation: Orientation) -> &'static [Vec2; 4] {
         &self.mino().coords[orientation as usize]
