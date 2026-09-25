@@ -670,4 +670,86 @@ mod test {
         assert!(p.b2b);
         assert!(p.score >= 800 + 400); // quad + b2b bonus
     }
+
+    // -------- detect_tspin --------
+
+    /// Corners are at pos + (0,0), pos+(2,0), pos+(0,2), pos+(2,2). Indices
+    /// 0..3 map to bottom-left, bottom-right, top-left, top-right.
+    fn block_corners(p: &mut Player<StubRng>, indices: &[usize]) {
+        let pos = p.current.pos;
+        let offsets = [v2![0, 0], v2![2, 0], v2![0, 2], v2![2, 2]];
+        for &i in indices {
+            p.board.set(pos + offsets[i], Cell::Block(MinoType::I));
+        }
+    }
+
+    #[rstest]
+    fn detect_tspin_returns_none_for_non_t_piece() {
+        let mut p = t_player();
+        p.current = Piece::spawn(MinoType::I);
+        block_corners(&mut p, &[0, 1, 2, 3]);
+        assert_eq!(detect_tspin(&p), TSpinStatus::None);
+    }
+
+    #[rstest]
+    fn detect_tspin_returns_none_when_fewer_than_3_corners_filled() {
+        let mut p = t_player();
+        // 0 corners filled
+        assert_eq!(detect_tspin(&p), TSpinStatus::None);
+
+        let mut p2 = t_player();
+        // 2 corners filled
+        block_corners(&mut p2, &[0, 1]);
+        assert_eq!(detect_tspin(&p2), TSpinStatus::None);
+    }
+
+    #[rstest]
+    fn detect_tspin_returns_full_when_4_corners_filled() {
+        let mut p = t_player();
+        block_corners(&mut p, &[0, 1, 2, 3]);
+        assert_eq!(detect_tspin(&p), TSpinStatus::Full);
+    }
+
+    #[rstest]
+    fn detect_tspin_north_3_corners_with_both_back_filled_is_full() {
+        // North: back = bottom = indices [0, 1]. Both back filled = Full.
+        let mut p = t_player();
+        block_corners(&mut p, &[0, 1, 2]); // both back + one front
+        assert_eq!(detect_tspin(&p), TSpinStatus::Full);
+    }
+
+    #[rstest]
+    fn detect_tspin_north_3_corners_with_back_partial_is_mini() {
+        // North: one back (0) + both fronts (2, 3). One back empty = Mini.
+        let mut p = t_player();
+        block_corners(&mut p, &[0, 2, 3]);
+        assert_eq!(detect_tspin(&p), TSpinStatus::Mini);
+    }
+
+    #[rstest]
+    fn detect_tspin_east_back_indices_use_left_side() {
+        // East: tip right, back = left = indices [0, 2]. Both back filled = Full.
+        let mut p = t_player();
+        p.current.orientation = Orientation::East;
+        block_corners(&mut p, &[0, 2, 1]); // both back + one front
+        assert_eq!(detect_tspin(&p), TSpinStatus::Full);
+    }
+
+    #[rstest]
+    fn detect_tspin_south_back_indices_use_top() {
+        // South: tip down, back = top = indices [2, 3]. Both back filled = Full.
+        let mut p = t_player();
+        p.current.orientation = Orientation::South;
+        block_corners(&mut p, &[2, 3, 0]);
+        assert_eq!(detect_tspin(&p), TSpinStatus::Full);
+    }
+
+    #[rstest]
+    fn detect_tspin_west_back_indices_use_right() {
+        // West: tip left, back = right = indices [1, 3]. Both back filled = Full.
+        let mut p = t_player();
+        p.current.orientation = Orientation::West;
+        block_corners(&mut p, &[1, 3, 0]);
+        assert_eq!(detect_tspin(&p), TSpinStatus::Full);
+    }
 }
