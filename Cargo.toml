@@ -9,6 +9,7 @@ license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]
 tet-domain = {  path = "crates/tet-domain" }
+thiserror = "2.0.21"
 
 # dev dependencies
 rstest = { version = "0.27.0" }

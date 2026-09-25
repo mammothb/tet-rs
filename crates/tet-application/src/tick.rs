@@ -152,7 +152,7 @@ pub fn spawn_next_piece<R: Rng>(player: &mut Player<R>) {
 }
 
 pub fn project_ghost<R: Rng>(player: &Player<R>) -> Vec2 {
-    let mut ghost = player.current.clone(); // Piece is Copy
+    let mut ghost = player.current;
     loop {
         let original = ghost.pos;
         ghost.shift(v2![0, -1]);
@@ -545,7 +545,7 @@ mod test {
 
     #[rstest]
     fn project_ghost_returns_floor_position_on_empty_board() {
-        let mut p = t_player();
+        let p = t_player();
         // T spawns at pos (3, 18). Lowest cell at y=19. Floor is y=0.
         let ghost = project_ghost(&p);
         // Ghost pos is bbox origin — bottom row at y=0 means bbox y = -1.
