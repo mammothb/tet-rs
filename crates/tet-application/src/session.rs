@@ -231,8 +231,8 @@ mod test {
 
     use rstest::rstest;
 
-    use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
     use crate::TSpinStatus;
+    use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
 
     use crate::PendingGarbage;
     use crate::player::{Controller, Player};
@@ -486,8 +486,16 @@ mod test {
         session.add_player(empty_player());
         session.add_player(empty_player());
         let results = vec![
-            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: true },
-            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+            TickResult {
+                lines_cleared: 0,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            },
+            TickResult {
+                lines_cleared: 0,
+                tspin: TSpinStatus::None,
+                piece_locked: false,
+            },
         ];
         session.distribute_garbage(&results);
         assert!(session.players[0].pending_garbage.is_empty());
@@ -502,16 +510,29 @@ mod test {
             session.add_player(empty_player());
             session.add_player(empty_player());
             let results = vec![
-                TickResult { lines_cleared: lines, tspin: TSpinStatus::None, piece_locked: true },
-                TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+                TickResult {
+                    lines_cleared: lines,
+                    tspin: TSpinStatus::None,
+                    piece_locked: true,
+                },
+                TickResult {
+                    lines_cleared: 0,
+                    tspin: TSpinStatus::None,
+                    piece_locked: false,
+                },
             ];
             session.distribute_garbage(&results);
             if expected_rows == 0 {
-                assert!(session.players[1].pending_garbage.is_empty(),
-                    "lines={lines} should send 0 rows");
+                assert!(
+                    session.players[1].pending_garbage.is_empty(),
+                    "lines={lines} should send 0 rows"
+                );
             } else {
-                assert_eq!(session.players[1].pending_garbage.len(), 1,
-                    "lines={lines} should send {expected_rows} rows");
+                assert_eq!(
+                    session.players[1].pending_garbage.len(),
+                    1,
+                    "lines={lines} should send {expected_rows} rows"
+                );
                 assert_eq!(session.players[1].pending_garbage[0].count, expected_rows);
             }
         }
@@ -524,12 +545,20 @@ mod test {
         session.add_player(empty_player());
         // Player 0 attacks; player 0 should NOT receive its own attack.
         let results = vec![
-            TickResult { lines_cleared: 4, tspin: TSpinStatus::None, piece_locked: true },
-            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+            TickResult {
+                lines_cleared: 4,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            },
+            TickResult {
+                lines_cleared: 0,
+                tspin: TSpinStatus::None,
+                piece_locked: false,
+            },
         ];
         session.distribute_garbage(&results);
-        assert_eq!(session.players[0].pending_garbage.len(), 0);  // attacker
-        assert_eq!(session.players[1].pending_garbage.len(), 1);  // opponent
+        assert_eq!(session.players[0].pending_garbage.len(), 0); // attacker
+        assert_eq!(session.players[1].pending_garbage.len(), 1); // opponent
     }
 
     #[rstest]
@@ -539,9 +568,21 @@ mod test {
         session.add_player(empty_player());
         session.add_player(empty_player());
         let results = vec![
-            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true }, // p0
-            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true }, // p1
-            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false }, // p2
+            TickResult {
+                lines_cleared: 2,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            }, // p0
+            TickResult {
+                lines_cleared: 2,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            }, // p1
+            TickResult {
+                lines_cleared: 0,
+                tspin: TSpinStatus::None,
+                piece_locked: false,
+            }, // p2
         ];
         session.distribute_garbage(&results);
         // p0 receives from p1
@@ -558,26 +599,51 @@ mod test {
         session.add_player(empty_player());
         session.add_player(empty_player());
         let results = vec![
-            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
-            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+            TickResult {
+                lines_cleared: 2,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            },
+            TickResult {
+                lines_cleared: 0,
+                tspin: TSpinStatus::None,
+                piece_locked: false,
+            },
         ];
         session.distribute_garbage(&results);
-        assert_eq!(session.players[1].pending_garbage[0].delay_remaining, GARBAGE_DELAY_FRAMES);
+        assert_eq!(
+            session.players[1].pending_garbage[0].delay_remaining,
+            GARBAGE_DELAY_FRAMES
+        );
     }
 
     #[rstest]
     fn distribute_garbage_hole_uses_attacker_rng() {
         let mut p0 = empty_player();
         // Force attack_rng to return a specific value.
-        p0.attack_rng = StubRng { values: vec![42], idx: 0 };
+        p0.attack_rng = StubRng {
+            values: vec![42],
+            idx: 0,
+        };
         let mut p1 = empty_player();
-        p1.attack_rng = StubRng { values: vec![7], idx: 0 };
+        p1.attack_rng = StubRng {
+            values: vec![7],
+            idx: 0,
+        };
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(p0);
         session.add_player(p1);
         let results = vec![
-            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
-            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
+            TickResult {
+                lines_cleared: 2,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            },
+            TickResult {
+                lines_cleared: 2,
+                tspin: TSpinStatus::None,
+                piece_locked: true,
+            },
         ];
         session.distribute_garbage(&results);
         // p0's attack_rng returned 42 → 42 % 10 = 2 (sent to p1)
@@ -586,7 +652,7 @@ mod test {
         assert_eq!(session.players[0].pending_garbage[0].hole, 7);
     }
 
-        // -------- apply_input --------
+    // -------- apply_input --------
 
     #[rstest]
     fn apply_input_none_returns_none_and_no_change() {
@@ -719,7 +785,12 @@ mod test {
 
     fn bot_move(kind: MinoType, orient: Orientation, x: i8, y: i8) -> Move {
         Move {
-            location: PieceLocation { kind, orientation: orient, x, y },
+            location: PieceLocation {
+                kind,
+                orientation: orient,
+                x,
+                y,
+            },
             spin: Spin::None,
         }
     }
