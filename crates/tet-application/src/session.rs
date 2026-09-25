@@ -232,6 +232,7 @@ mod test {
     use rstest::rstest;
 
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
+    use crate::TSpinStatus;
 
     use crate::PendingGarbage;
     use crate::player::{Controller, Player};
@@ -477,7 +478,115 @@ mod test {
         assert!(session.is_finished());
     }
 
-    // -------- apply_input --------
+    // -------- distribute_garbage --------
+
+    #[rstest]
+    fn distribute_garbage_no_attack_for_zero_lines() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        let results = vec![
+            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: true },
+            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+        ];
+        session.distribute_garbage(&results);
+        assert!(session.players[0].pending_garbage.is_empty());
+        assert!(session.players[1].pending_garbage.is_empty());
+    }
+
+    #[rstest]
+    fn distribute_garbage_attack_count_per_guideline_table() {
+        // 2 lines → 1 garbage, 3 lines → 2, 4 lines → 4.
+        for &(lines, expected_rows) in &[(1, 0), (2, 1), (3, 2), (4, 4)] {
+            let mut session = GameSession::new(Ruleset::guideline());
+            session.add_player(empty_player());
+            session.add_player(empty_player());
+            let results = vec![
+                TickResult { lines_cleared: lines, tspin: TSpinStatus::None, piece_locked: true },
+                TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+            ];
+            session.distribute_garbage(&results);
+            if expected_rows == 0 {
+                assert!(session.players[1].pending_garbage.is_empty(),
+                    "lines={lines} should send 0 rows");
+            } else {
+                assert_eq!(session.players[1].pending_garbage.len(), 1,
+                    "lines={lines} should send {expected_rows} rows");
+                assert_eq!(session.players[1].pending_garbage[0].count, expected_rows);
+            }
+        }
+    }
+
+    #[rstest]
+    fn distribute_garbage_skips_attacker() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        // Player 0 attacks; player 0 should NOT receive its own attack.
+        let results = vec![
+            TickResult { lines_cleared: 4, tspin: TSpinStatus::None, piece_locked: true },
+            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+        ];
+        session.distribute_garbage(&results);
+        assert_eq!(session.players[0].pending_garbage.len(), 0);  // attacker
+        assert_eq!(session.players[1].pending_garbage.len(), 1);  // opponent
+    }
+
+    #[rstest]
+    fn distribute_garbage_3_player_each_attacks_other_two() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        let results = vec![
+            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true }, // p0
+            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true }, // p1
+            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false }, // p2
+        ];
+        session.distribute_garbage(&results);
+        // p0 receives from p1
+        assert_eq!(session.players[0].pending_garbage.len(), 1);
+        // p1 receives from p0
+        assert_eq!(session.players[1].pending_garbage.len(), 1);
+        // p2 receives from both p0 and p1
+        assert_eq!(session.players[2].pending_garbage.len(), 2);
+    }
+
+    #[rstest]
+    fn distribute_garbage_attack_has_garbage_delay_frames() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        let results = vec![
+            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
+            TickResult { lines_cleared: 0, tspin: TSpinStatus::None, piece_locked: false },
+        ];
+        session.distribute_garbage(&results);
+        assert_eq!(session.players[1].pending_garbage[0].delay_remaining, GARBAGE_DELAY_FRAMES);
+    }
+
+    #[rstest]
+    fn distribute_garbage_hole_uses_attacker_rng() {
+        let mut p0 = empty_player();
+        // Force attack_rng to return a specific value.
+        p0.attack_rng = StubRng { values: vec![42], idx: 0 };
+        let mut p1 = empty_player();
+        p1.attack_rng = StubRng { values: vec![7], idx: 0 };
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(p0);
+        session.add_player(p1);
+        let results = vec![
+            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
+            TickResult { lines_cleared: 2, tspin: TSpinStatus::None, piece_locked: true },
+        ];
+        session.distribute_garbage(&results);
+        // p0's attack_rng returned 42 → 42 % 10 = 2 (sent to p1)
+        assert_eq!(session.players[1].pending_garbage[0].hole, 2);
+        // p1's attack_rng returned 7 → 7 % 10 = 7 (sent to p0)
+        assert_eq!(session.players[0].pending_garbage[0].hole, 7);
+    }
+
+        // -------- apply_input --------
 
     #[rstest]
     fn apply_input_none_returns_none_and_no_change() {
@@ -502,6 +611,31 @@ mod test {
         let mut session = t_session();
         let _ = session.apply_input(0, Input::RotateCW);
         assert_eq!(session.players[0].current.orientation, Orientation::East);
+    }
+
+    #[rstest]
+    fn apply_input_move_right_shifts_piece_right() {
+        let mut session = t_session();
+        let original_pos = session.players[0].current.pos;
+        let result = session.apply_input(0, Input::MoveRight);
+        assert!(result.is_none());
+        assert_eq!(session.players[0].current.pos, original_pos + v2![1, 0]);
+    }
+
+    #[rstest]
+    fn apply_input_rotate_ccw_retreats_orientation() {
+        let mut session = t_session();
+        let _ = session.apply_input(0, Input::RotateCCW);
+        assert_eq!(session.players[0].current.orientation, Orientation::West);
+    }
+
+    #[rstest]
+    fn apply_input_soft_drop_moves_piece_down() {
+        let mut session = t_session();
+        let original_pos = session.players[0].current.pos;
+        let result = session.apply_input(0, Input::SoftDrop);
+        assert!(result.is_none());
+        assert_eq!(session.players[0].current.pos, original_pos + v2![0, -1]);
     }
 
     #[rstest]
@@ -579,5 +713,74 @@ mod test {
         session.step_bot(0, &mut bot);
         // Move was consumed (Vec was moved out)
         assert_eq!(bot.suggests, 1);
+    }
+
+    // -------- apply_bot_move --------
+
+    fn bot_move(kind: MinoType, orient: Orientation, x: i8, y: i8) -> Move {
+        Move {
+            location: PieceLocation { kind, orientation: orient, x, y },
+            spin: Spin::None,
+        }
+    }
+
+    #[rstest]
+    fn apply_bot_move_no_rotation_translates_to_target_position() {
+        let mut p = empty_player();
+        // T-piece spawns at bbox (3, 18); center at (4, 19).
+        // Bot asks for T at center (5, 19) → bbox anchor (4, 18).
+        let mv = bot_move(MinoType::T, Orientation::North, 5, 19);
+        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        assert!(result.is_some());
+        assert_eq!(p.current.orientation, Orientation::North);
+        assert_eq!(p.current.pos, v2![4, 18]);
+    }
+
+    #[rstest]
+    fn apply_bot_move_cw_rotation_succeeds() {
+        let mut p = empty_player();
+        // T-piece spawns North, center at (4, 19). Bot asks for East, center (4, 19).
+        // East bbox anchor = (4 - 1, 19 - 1) = (3, 18). Empty board, no collision.
+        let mv = bot_move(MinoType::T, Orientation::East, 4, 19);
+        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        assert!(result.is_some());
+        assert_eq!(p.current.orientation, Orientation::East);
+        assert_eq!(p.current.pos, v2![3, 18]);
+    }
+
+    #[rstest]
+    fn apply_bot_move_ccw_rotation_succeeds() {
+        let mut p = empty_player();
+        let mv = bot_move(MinoType::T, Orientation::West, 4, 19);
+        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        assert!(result.is_some());
+        assert_eq!(p.current.orientation, Orientation::West);
+        assert_eq!(p.current.pos, v2![3, 18]);
+    }
+
+    #[rstest]
+    fn apply_bot_move_180_degree_rotation_returns_none() {
+        let mut p = empty_player();
+        // North → South is 180°, invalid in SRS.
+        let mv = bot_move(MinoType::T, Orientation::South, 4, 19);
+        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        assert!(result.is_none());
+        // State unchanged
+        assert_eq!(p.current.orientation, Orientation::North);
+        assert_eq!(p.current.pos, v2![3, 18]);
+    }
+
+    #[rstest]
+    fn apply_bot_move_collision_reverts_state_and_returns_none() {
+        let mut p = empty_player();
+        // T spawns at cells (3, 19), (4, 19), (5, 19), (4, 20). Block one.
+        p.board.set(v2![3, 19], Cell::Block(MinoType::I));
+        // Bot asks for T at center (4, 19) — same as spawn, but (3, 19) is taken.
+        let mv = bot_move(MinoType::T, Orientation::North, 4, 19);
+        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        assert!(result.is_none());
+        // State reverted
+        assert_eq!(p.current.orientation, Orientation::North);
+        assert_eq!(p.current.pos, v2![3, 18]);
     }
 }
