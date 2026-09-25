@@ -693,7 +693,7 @@ mod test {
 
     #[rstest]
     fn detect_tspin_returns_none_when_fewer_than_3_corners_filled() {
-        let mut p = t_player();
+        let p = t_player();
         // 0 corners filled
         assert_eq!(detect_tspin(&p), TSpinStatus::None);
 
