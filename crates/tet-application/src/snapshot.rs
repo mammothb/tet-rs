@@ -1,6 +1,6 @@
 use tet_domain::{Board, MinoType};
 
-use crate::{Phase, Piece};
+use crate::{PendingGarbage, Phase, Piece};
 
 pub struct PlayerSnapshot {
     pub board: Board,
@@ -10,4 +10,5 @@ pub struct PlayerSnapshot {
     pub b2b: bool,
     pub current: Piece,
     pub phase: Phase,
+    pub pending_garbage: Vec<PendingGarbage>,
 }

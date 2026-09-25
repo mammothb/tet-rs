@@ -1,6 +1,6 @@
 use tet_domain::{MinoType, Orientation, Rotation, Vec2};
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Piece {
     pub kind: MinoType,
     pub orientation: Orientation,

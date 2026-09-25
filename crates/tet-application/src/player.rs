@@ -2,7 +2,7 @@ use tet_domain::{Board, MinoType, Queue, Rng};
 
 use crate::{Piece, ports::bot::BotTransport};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Playing,
     GameOver,
@@ -17,6 +17,7 @@ pub enum Controller {
 /// `delay_remaining` counts down each frame; when it reaches 0, the rows are
 /// pushed onto the board. While in flight, the player can cancel rows by
 /// clearing lines.
+#[derive(Clone, Copy)]
 pub struct PendingGarbage {
     pub count: u8,
     pub hole: u8,
@@ -39,4 +40,6 @@ pub struct Player<R: Rng> {
     /// In-flight garbage targeting this player. New attacks are pushed onto
     /// the back; cancellation peels from the back (most recent first).
     pub pending_garbage: Vec<PendingGarbage>,
+    /// RNG used to generate attack hole columns.
+    pub attack_rng: R,
 }

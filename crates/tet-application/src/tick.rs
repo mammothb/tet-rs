@@ -1,14 +1,16 @@
 use tet_domain::{Cell, MinoType, Orientation, Rng, Rotation, Ruleset, Vec2, v2};
 
-use crate::{LOCK_DELAY_FRAMES, Phase, Piece, player::Player};
+use crate::{LOCK_DELAY_FRAMES, Phase, Piece, Player};
 
-#[derive(PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 pub enum TSpinStatus {
+    #[default]
     None,
     Mini,
     Full,
 }
 
+#[derive(Default)]
 pub struct TickResult {
     pub lines_cleared: u8,
     pub tspin: TSpinStatus,
@@ -32,12 +34,7 @@ pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickRes
         player.lock_delay += 1;
         if player.lock_delay >= LOCK_DELAY_FRAMES {
             result = try_lock(player);
-            cancel_pending_garbage(player, result.lines_cleared);
-            update_score(player, &result, ruleset);
-            spawn_next_piece(player);
-            if check_topout(player) {
-                player.phase = Phase::GameOver;
-            }
+            post_lock(player, &result, ruleset);
         }
     }
 
@@ -115,6 +112,15 @@ pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
         lines_cleared,
         tspin,
         piece_locked: true,
+    }
+}
+
+pub fn post_lock<R: Rng>(player: &mut Player<R>, result: &TickResult, ruleset: &Ruleset) {
+    cancel_pending_garbage(player, result.lines_cleared);
+    update_score(player, result, ruleset);
+    spawn_next_piece(player);
+    if check_topout(player) {
+        player.phase = Phase::GameOver;
     }
 }
 
@@ -334,6 +340,7 @@ mod test {
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(NoopBot)),
             pending_garbage: Vec::new(),
+            attack_rng: StubRng::counter(),
         }
     }
 
