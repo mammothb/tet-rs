@@ -1,5 +1,5 @@
 [package]
-name = "tet-application"
+name = "tet-infrastructure"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,7 @@ license.workspace = true
 [dependencies]
 tet-domain = { workspace = true }
 
-thiserror = { workspace = true }
-
-[dev-dependencies]
-rstest = { workspace = true }
+rand = { workspace = true }
 
 [lints]
 workspace = true

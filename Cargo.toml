@@ -8,8 +8,10 @@ rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]
-tet-domain = {  path = "crates/tet-domain" }
-thiserror = "2.0.21"
+tet-domain = { path = "crates/tet-domain" }
+
+rand = { version = "0.10.3" }
+thiserror = { version = "2.0.21" }
 
 # dev dependencies
 rstest = { version = "0.27.0" }
