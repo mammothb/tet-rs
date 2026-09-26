@@ -16,10 +16,22 @@ pub struct BotSubprocess {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     /// Bot metadata collected from the `info` message.
-    info: BotInfo,
+    pub info: BotInfo,
 }
 
-#[derive(Default)]
+// Manual Debug because the child/stdio fields don't implement Debug. Showing
+// just `info` is enough for test failure messages. `finish_non_exhaustive()`
+// signals that some fields are intentionally omitted (so clippy's
+// `missing_fields_in_debug` lint doesn't complain).
+impl std::fmt::Debug for BotSubprocess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BotSubprocess")
+            .field("info", &self.info)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct BotInfo {
     pub name: String,
     pub version: String,
@@ -92,26 +104,43 @@ impl BotSubprocess {
 
     /// Send one `FrontendMessage` over stdin (line-delimited JSON).
     async fn send(&mut self, msg: &FrontendMessage) -> Result<(), BotError> {
+        use tokio::io::ErrorKind;
+
         let mut json = serde_json::to_string(msg)
             .map_err(|e| BotError::Protocol(format!("serialize FrontendMessage: {e}")))?;
         json.push('\n'); // TBP wire format is one JSON message per line
 
-        self.stdin
-            .write_all(json.as_bytes())
-            .await
-            .map_err(|_| BotError::Io)?;
-        self.stdin.flush().await.map_err(|_| BotError::Io)?;
+        // SIGKILL of the bot can close stdin/stdout before our write lands.
+        // BrokenPipe at this point means the bot is gone — treat as Exited.
+        if let Err(e) = self.stdin.write_all(json.as_bytes()).await {
+            return Err(if e.kind() == ErrorKind::BrokenPipe {
+                BotError::Exited
+            } else {
+                BotError::Io
+            });
+        }
+        if let Err(e) = self.stdin.flush().await {
+            return Err(if e.kind() == ErrorKind::BrokenPipe {
+                BotError::Exited
+            } else {
+                BotError::Io
+            });
+        }
         Ok(())
     }
 
     /// Read one `BotMessage` from stdout (blocking until newline).
     async fn recv(&mut self) -> Result<BotMessage, BotError> {
+        use tokio::io::ErrorKind;
+
         let mut line = String::new();
-        let n = self
-            .stdout
-            .read_line(&mut line)
-            .await
-            .map_err(|_| BotError::Io)?;
+        let n = match self.stdout.read_line(&mut line).await {
+            Ok(n) => n,
+            // SIGKILL of the bot can produce a broken-pipe error rather than
+            // clean EOF, depending on timing. Treat it as Exited too.
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => return Err(BotError::Exited),
+            Err(_) => return Err(BotError::Io),
+        };
         if n == 0 {
             // EOF — bot closed stdout, probably exited.
             return Err(BotError::Exited);

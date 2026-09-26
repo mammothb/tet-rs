@@ -5,7 +5,7 @@ use crate::PlayerSnapshot;
 
 /// A move a bot wants to play, in TBP wire-format coordinates:
 /// (x, y) is the **true-rotation center** of the piece, not the bbox origin.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BotPieceLocation {
     pub kind: MinoType,
     pub orientation: Orientation,
@@ -20,7 +20,7 @@ pub enum BotSpin {
     Full,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BotMove {
     pub location: BotPieceLocation,
     pub spin: BotSpin,
