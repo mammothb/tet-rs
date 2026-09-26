@@ -24,5 +24,13 @@ rstest = { workspace = true }
 name = "echo_bot"
 path = "tests/fixtures/echo_bot.rs"
 
+[[bin]]
+name = "bad_info_bot"
+path = "tests/fixtures/bad_info_bot.rs"
+
+[[bin]]
+name = "bad_ready_bot"
+path = "tests/fixtures/bad_ready_bot.rs"
+
 [lints]
 workspace = true

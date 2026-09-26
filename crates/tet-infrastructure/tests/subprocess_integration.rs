@@ -161,3 +161,47 @@ async fn update_with_populated_snapshot() {
     // echo_bot ignored the start, but our send path succeeded.
     bot.stop().await;
 }
+
+// ============ Handshake error-path tests ============
+// These catch bugs where the spawn handshake accepts the wrong message at
+// the wrong step (e.g., treating `ready` as `info`).
+
+#[tokio::test]
+async fn spawn_fails_with_protocol_error_when_first_message_is_not_info() {
+    // bad_info_bot sends `ready` first instead of `info`.
+    let result = BotSubprocess::spawn(Path::new(env!("CARGO_BIN_EXE_bad_info_bot"))).await;
+    match result {
+        Err(tet_application::BotError::Protocol(msg)) => {
+            assert!(
+                msg.contains("expected Info"),
+                "error message should mention expected Info, got: {msg}"
+            );
+        }
+        other => panic!("expected Protocol error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_fails_with_protocol_error_when_second_message_is_not_ready() {
+    // bad_ready_bot sends correct `info`, reads `rules`, then sends `error`
+    // instead of `ready`.
+    let result = BotSubprocess::spawn(Path::new(env!("CARGO_BIN_EXE_bad_ready_bot"))).await;
+    match result {
+        Err(tet_application::BotError::Protocol(msg)) => {
+            assert!(
+                msg.contains("expected Ready"),
+                "error message should mention expected Ready, got: {msg}"
+            );
+        }
+        other => panic!("expected Protocol error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_fails_with_io_error_when_binary_path_does_not_exist() {
+    let result = BotSubprocess::spawn(Path::new("/nonexistent/path/to/binary")).await;
+    assert!(
+        matches!(result, Err(tet_application::BotError::Io)),
+        "expected Io error for missing binary, got {result:?}"
+    );
+}
