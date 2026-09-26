@@ -13,7 +13,7 @@ pub struct BotPieceLocation {
     pub y: i8,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotSpin {
     None,
     Mini,

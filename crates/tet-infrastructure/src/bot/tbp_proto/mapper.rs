@@ -290,3 +290,280 @@ pub fn tbp_error_to_bot(e: &TbpError) -> BotError {
         MaybeUnknown::Known(_) => BotError::Protocol("unrecognized error reason from bot".into()),
     }
 }
+
+#[cfg(test)]
+mod test {
+    //! Conversion tests. Focus on:
+    //! - The bbox-anchor ↔ TBP-center math (the math error hotspot)
+    //! - `MaybeUnknown::Unknown` → error paths (protocol violation detection)
+    //! - `i32 → u32` clamping (negative combo)
+    //! - One round-trip per enum to verify wiring (per "don't test data" principle,
+    //!   we don't exhaustively cover every enum variant — the matches are static).
+
+    use super::*;
+    use crate::codec::{
+        Error as TbpError, ErrorCause, MaybeUnknown, Move as TbpMove,
+        Orientation as TbpOrientation, Piece as TbpPiece, PieceLocation as TbpPieceLocation,
+        Spin as TbpSpin,
+    };
+    use rstest::rstest;
+    use serde_json::json;
+    use tet_application::ports::bot::{BotMove, BotPieceLocation, BotSpin};
+    use tet_application::{Phase, Piece, PlayerSnapshot};
+    use tet_domain::{Board, Cell, Vec2};
+
+    // ============ Test fixtures ============
+
+    fn t_snap() -> PlayerSnapshot {
+        PlayerSnapshot {
+            board: Board::new(10, 25),
+            queue: vec![MinoType::I, MinoType::O, MinoType::T],
+            hold: Some(MinoType::S),
+            combo: 0,
+            b2b: false,
+            current: Piece::spawn(MinoType::T),
+            phase: Phase::Playing,
+            pending_garbage: vec![],
+        }
+    }
+
+    fn piece_loc(kind: MinoType, orientation: Orientation, x: i8, y: i8) -> BotPieceLocation {
+        BotPieceLocation {
+            kind,
+            orientation,
+            x,
+            y,
+        }
+    }
+
+    fn tbp_loc(kind: TbpPiece, orientation: TbpOrientation, x: i32, y: i32) -> TbpPieceLocation {
+        TbpPieceLocation::new(
+            MaybeUnknown::Known(kind),
+            MaybeUnknown::Known(orientation),
+            x,
+            y,
+        )
+    }
+
+    // ============ snapshot_to_start ============
+
+    #[rstest]
+    fn snapshot_to_start_clamps_negative_combo_to_zero() {
+        let mut snap = t_snap();
+        snap.combo = -1;
+        let start = snapshot_to_start(&snap);
+        assert_eq!(start.combo, 0);
+    }
+
+    #[rstest]
+    fn snapshot_to_start_preserves_positive_combo() {
+        let mut snap = t_snap();
+        snap.combo = 7;
+        let start = snapshot_to_start(&snap);
+        assert_eq!(start.combo, 7);
+    }
+
+    #[rstest]
+    fn snapshot_to_start_maps_cells_to_optional_chars() {
+        let mut snap = t_snap();
+        snap.board.set(Vec2::new(0, 0), Cell::Block(MinoType::I));
+        snap.board.set(Vec2::new(1, 0), Cell::Garbage);
+        // y=24 leaves it empty.
+        let start = snapshot_to_start(&snap);
+        assert_eq!(start.board[0][0], Some('I'));
+        assert_eq!(start.board[0][1], Some('G'));
+        assert_eq!(start.board[24][0], None);
+    }
+
+    #[rstest]
+    fn snapshot_to_start_maps_hold_and_queue() {
+        let snap = t_snap();
+        let start = snapshot_to_start(&snap);
+        assert!(matches!(start.hold, Some(MaybeUnknown::Known(TbpPiece::S))));
+        // TbpPiece doesn't derive PartialEq, so convert back through our domain
+        // type for the comparison. TbpPiece isn't Copy either, so clone.
+        let queue_pieces: Vec<MinoType> = start
+            .queue
+            .iter()
+            .map(|p| match p {
+                MaybeUnknown::Known(p) => {
+                    tbp_piece_to_mino_type(MaybeUnknown::Known(p.clone())).unwrap()
+                }
+                MaybeUnknown::Unknown(_) => panic!("queue should be all Known"),
+            })
+            .collect();
+        assert_eq!(queue_pieces, vec![MinoType::I, MinoType::O, MinoType::T]);
+    }
+
+    // ============ bot_move_to_tbp / tbp_move_to_bot: bbox ↔ TBP-center math ============
+
+    #[rstest]
+    fn bot_move_to_tbp_i_piece_north_shifts_y_by_1() {
+        // I-piece North: center offset (0, 1). bbox (4, 19) → center (4, 20).
+        let m = BotMove {
+            location: piece_loc(MinoType::I, Orientation::North, 4, 19),
+            spin: BotSpin::None,
+        };
+        let t = bot_move_to_tbp(m);
+        assert_eq!(t.location.x, 4);
+        assert_eq!(t.location.y, 20);
+    }
+
+    #[rstest]
+    fn bot_move_to_tbp_o_piece_south_shifts_both_axes() {
+        // O-piece South: center offset (2, 2). bbox (3, 18) → center (5, 20).
+        let m = BotMove {
+            location: piece_loc(MinoType::O, Orientation::South, 3, 18),
+            spin: BotSpin::None,
+        };
+        let t = bot_move_to_tbp(m);
+        assert_eq!(t.location.x, 5);
+        assert_eq!(t.location.y, 20);
+    }
+
+    #[rstest]
+    fn tbp_move_to_bot_is_inverse_of_outbound_for_i_piece_north() {
+        // bbox (4, 19) → center (4, 20) → bbox (4, 19).
+        let original = BotMove {
+            location: piece_loc(MinoType::I, Orientation::North, 4, 19),
+            spin: BotSpin::None,
+        };
+        let t = bot_move_to_tbp(original);
+        let m = tbp_move_to_bot(t).unwrap();
+        assert_eq!(m.location.kind, MinoType::I);
+        assert_eq!(m.location.orientation, Orientation::North);
+        assert_eq!(m.location.x, 4);
+        assert_eq!(m.location.y, 19);
+    }
+
+    #[rstest]
+    fn tbp_move_to_bot_errors_on_coordinates_outside_i8_range() {
+        // TBP allows x/y up to i32; we narrow to i8. 200 doesn't fit.
+        let t = TbpMove::new(
+            tbp_loc(TbpPiece::J, TbpOrientation::North, 200, 20),
+            MaybeUnknown::Known(TbpSpin::None),
+        );
+        assert!(tbp_move_to_bot(t).is_err());
+    }
+
+    // ============ MaybeUnknown error paths ============
+
+    #[rstest]
+    fn tbp_move_to_bot_errors_on_unknown_spin() {
+        let t = TbpMove::new(
+            tbp_loc(TbpPiece::J, TbpOrientation::North, 5, 20),
+            MaybeUnknown::Unknown(json!("future-spin")),
+        );
+        assert!(tbp_move_to_bot(t).is_err());
+    }
+
+    #[rstest]
+    fn tbp_move_to_bot_errors_on_unknown_piece_kind() {
+        let t = TbpMove::new(
+            TbpPieceLocation::new(
+                MaybeUnknown::Unknown(json!("future-piece")),
+                MaybeUnknown::Known(TbpOrientation::North),
+                5,
+                20,
+            ),
+            MaybeUnknown::Known(TbpSpin::None),
+        );
+        assert!(tbp_move_to_bot(t).is_err());
+    }
+
+    #[rstest]
+    fn tbp_piece_to_mino_type_errors_on_unknown() {
+        assert!(tbp_piece_to_mino_type(MaybeUnknown::Unknown(json!("X"))).is_err());
+    }
+
+    #[rstest]
+    fn tbp_spin_to_bot_errors_on_unknown() {
+        assert!(tbp_spin_to_bot(MaybeUnknown::Unknown(json!("spinz"))).is_err());
+    }
+
+    #[rstest]
+    fn tbp_orientation_to_orientation_errors_on_unknown() {
+        assert!(tbp_orientation_to_orientation(MaybeUnknown::Unknown(json!("diag"))).is_err());
+    }
+
+    // ============ Enum round-trips (wiring verification) ============
+
+    #[rstest]
+    fn mino_type_round_trip_all_variants() {
+        // Round-tripping all 7 verifies the wiring without asserting on the
+        // wire-format strings (don't test data).
+        for m in [
+            MinoType::I,
+            MinoType::O,
+            MinoType::T,
+            MinoType::S,
+            MinoType::Z,
+            MinoType::J,
+            MinoType::L,
+        ] {
+            let t = mino_type_to_tbp_piece(m);
+            let back = tbp_piece_to_mino_type(MaybeUnknown::Known(t)).unwrap();
+            assert_eq!(m, back, "round-trip failed for {m:?}");
+        }
+    }
+
+    #[rstest]
+    fn orientation_round_trip_all_variants() {
+        for o in [
+            Orientation::North,
+            Orientation::East,
+            Orientation::South,
+            Orientation::West,
+        ] {
+            let t = orientation_to_tbp_orientation(o);
+            let back = tbp_orientation_to_orientation(MaybeUnknown::Known(t)).unwrap();
+            assert_eq!(o, back);
+        }
+    }
+
+    #[rstest]
+    fn spin_round_trip_all_variants() {
+        for s in [BotSpin::None, BotSpin::Mini, BotSpin::Full] {
+            let t = bot_spin_to_tbp(s);
+            let back = tbp_spin_to_bot(MaybeUnknown::Known(t)).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    // ============ Cell conversion ============
+
+    #[rstest]
+    fn cell_to_tbp_maps_all_three_variants() {
+        assert_eq!(cell_to_tbp(&Cell::Empty), None);
+        assert_eq!(cell_to_tbp(&Cell::Block(MinoType::T)), Some("T"));
+        assert_eq!(cell_to_tbp(&Cell::Garbage), Some("G"));
+    }
+
+    #[rstest]
+    fn cell_from_tbp_maps_all_three_cases() {
+        assert_eq!(cell_from_tbp(None).unwrap(), Cell::Empty);
+        assert_eq!(cell_from_tbp(Some('G')).unwrap(), Cell::Garbage);
+        assert_eq!(cell_from_tbp(Some('I')).unwrap(), Cell::Block(MinoType::I));
+    }
+
+    #[rstest]
+    fn cell_from_tbp_errors_on_unknown_char() {
+        // 'X' is not a piece letter (JLSZTIO) nor 'G'.
+        let err = cell_from_tbp(Some('X')).unwrap_err();
+        assert!(matches!(err, BotError::Protocol(_)));
+    }
+
+    // ============ Error mapping ============
+
+    #[rstest]
+    fn tbp_error_to_bot_maps_unsupported_rules_to_protocol() {
+        let e = TbpError::new(MaybeUnknown::Known(ErrorCause::UnsupportedRules));
+        assert!(matches!(tbp_error_to_bot(&e), BotError::Protocol(_)));
+    }
+
+    #[rstest]
+    fn tbp_error_to_bot_maps_unknown_reason_to_protocol() {
+        let e = TbpError::new(MaybeUnknown::Unknown(json!("future-reason")));
+        assert!(matches!(tbp_error_to_bot(&e), BotError::Protocol(_)));
+    }
+}
