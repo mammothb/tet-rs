@@ -1,0 +1,36 @@
+[package]
+name = "tet-infrastructure"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tet-application = { workspace = true }
+tet-domain = { workspace = true }
+
+async-trait = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tbp = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "rt-multi-thread", "macros", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+
+[[bin]]
+name = "echo_bot"
+path = "tests/fixtures/echo_bot.rs"
+
+[[bin]]
+name = "bad_info_bot"
+path = "tests/fixtures/bad_info_bot.rs"
+
+[[bin]]
+name = "bad_ready_bot"
+path = "tests/fixtures/bad_ready_bot.rs"
+
+[lints]
+workspace = true

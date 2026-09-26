@@ -295,7 +295,7 @@ mod test {
     use tet_domain::{Board, Queue};
 
     use crate::player::{Controller, PendingGarbage, Player};
-    use crate::ports::bot::{BotError, BotTransport, Move};
+    use crate::ports::bot::{BotError, BotMove, BotTransport};
     use crate::snapshot::PlayerSnapshot;
 
     // -------- test fixtures --------
@@ -347,17 +347,18 @@ mod test {
     /// Stub `BotTransport` that does nothing. Needed only to fill the
     /// `Controller::Bot` variant for `t_player`. Not used in any test.
     struct NoopBot;
+    #[async_trait::async_trait]
     impl BotTransport for NoopBot {
         fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
             Ok(())
         }
-        fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
+        async fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
             Ok(())
         }
-        fn suggest(&mut self) -> Result<Vec<Move>, BotError> {
+        async fn suggest(&mut self) -> Result<Vec<BotMove>, BotError> {
             Ok(Vec::new())
         }
-        fn stop(&mut self) {}
+        async fn stop(&mut self) {}
     }
 
     // -------- step_gravity --------

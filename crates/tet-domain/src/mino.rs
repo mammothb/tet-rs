@@ -72,6 +72,22 @@ impl MinoType {
         }
     }
 
+    /// Reverse of `as_str`. Returns `None` for non-piece letters (including
+    /// 'G' for garbage, which has its own `Cell` variant).
+    #[must_use]
+    pub const fn from_char(c: char) -> Option<Self> {
+        match c {
+            'I' => Some(MinoType::I),
+            'O' => Some(MinoType::O),
+            'T' => Some(MinoType::T),
+            'S' => Some(MinoType::S),
+            'Z' => Some(MinoType::Z),
+            'J' => Some(MinoType::J),
+            'L' => Some(MinoType::L),
+            _ => None,
+        }
+    }
+
     #[allow(clippy::match_same_arms)]
     #[must_use]
     pub const fn rotation_center_offset(kind: MinoType, orientation: Orientation) -> Vec2 {

@@ -2,7 +2,7 @@ use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
 
 use crate::tick;
 use crate::{
-    ATTACK_FOR_LINES, BotTransport, GARBAGE_DELAY_FRAMES, Input, Move, PendingGarbage, Phase,
+    ATTACK_FOR_LINES, BotMove, BotTransport, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase,
     Piece, Player, PlayerSnapshot, TickResult,
 };
 
@@ -65,11 +65,18 @@ impl<R: Rng> GameSession<R> {
 
     /// Drive a bot: take snapshot, ask transport for moves, apply first
     /// valid one. (For when the session is in control of the bot loop.)
-    pub fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
+    /// Drive a bot: take snapshot, ask transport for moves, apply first
+    /// valid one. (For when the session is in control of the bot loop.)
+    ///
+    /// Async because `BotTransport::update` and `suggest` are async (do I/O).
+    /// See `tet-application/Cargo.toml` for the `tokio` runtime.
+    pub async fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
         let snap = self.snapshot(idx);
-        bot.update(&snap).ok();
+        let _ = bot.update(&snap).await;
 
-        let Ok(moves) = bot.suggest() else { return };
+        let Ok(moves) = bot.suggest().await else {
+            return;
+        };
 
         // Try each move in preference order; first valid one wins.
         for mv in moves {
@@ -171,7 +178,7 @@ impl<R: Rng> GameSession<R> {
     }
 }
 
-fn apply_bot_move<R: Rng>(player: &mut Player<R>, mv: Move, ruleset: &Ruleset) -> Option<Piece> {
+fn apply_bot_move<R: Rng>(player: &mut Player<R>, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
     // 1. Convert TBP true-rotation-center → bbox-anchor position.
     //    `MinoType::tbp_center_for` is a static lookup in the domain.
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
@@ -230,13 +237,12 @@ mod test {
     use super::*;
 
     use rstest::rstest;
-
-    use crate::TSpinStatus;
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
 
     use crate::PendingGarbage;
+    use crate::TSpinStatus;
     use crate::player::{Controller, Player};
-    use crate::ports::bot::{BotError, Move, PieceLocation, Spin};
+    use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
     struct StubRng {
@@ -263,7 +269,7 @@ mod test {
 
     /// Stub bot that returns preconfigured moves and counts calls.
     struct StubBot {
-        moves: Vec<Move>,
+        moves: Vec<BotMove>,
         updates: usize,
         suggests: usize,
         stops: usize,
@@ -271,7 +277,7 @@ mod test {
     }
 
     impl StubBot {
-        fn new(moves: Vec<Move>) -> Self {
+        fn new(moves: Vec<BotMove>) -> Self {
             Self {
                 moves,
                 updates: 0,
@@ -294,15 +300,16 @@ mod test {
         }
     }
 
+    #[async_trait::async_trait]
     impl BotTransport for StubBot {
         fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
             Ok(())
         }
-        fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
+        async fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
             self.updates += 1;
             Ok(())
         }
-        fn suggest(&mut self) -> Result<Vec<Move>, BotError> {
+        async fn suggest(&mut self) -> Result<Vec<BotMove>, BotError> {
             self.suggests += 1;
             if self.fail_suggest {
                 Err(BotError::Exited)
@@ -310,7 +317,7 @@ mod test {
                 Ok(std::mem::take(&mut self.moves))
             }
         }
-        fn stop(&mut self) {
+        async fn stop(&mut self) {
             self.stops += 1;
         }
     }
@@ -744,54 +751,57 @@ mod test {
     // -------- step_bot --------
 
     #[rstest]
-    fn step_bot_calls_update_then_suggest() {
+    #[tokio::test]
+    async fn step_bot_calls_update_then_suggest() {
         let mut session = t_session();
         let mut bot = StubBot::empty();
-        session.step_bot(0, &mut bot);
+        session.step_bot(0, &mut bot).await;
         assert_eq!(bot.updates, 1);
         assert_eq!(bot.suggests, 1);
     }
 
     #[rstest]
-    fn step_bot_with_failing_suggest_returns_silently() {
+    #[tokio::test]
+    async fn step_bot_with_failing_suggest_returns_silently() {
         let mut session = t_session();
         let mut bot = StubBot::fail();
         // Should not panic; just returns.
-        session.step_bot(0, &mut bot);
+        session.step_bot(0, &mut bot).await;
         assert_eq!(bot.updates, 1);
         assert_eq!(bot.suggests, 1);
     }
 
     #[rstest]
-    fn step_bot_applies_first_valid_move() {
+    #[tokio::test]
+    async fn step_bot_applies_first_valid_move() {
         let mut session = t_session();
         // Bot suggests a move that's a no-op (same orientation, valid position).
-        let mv = Move {
-            location: PieceLocation {
+        let mv = BotMove {
+            location: BotPieceLocation {
                 kind: MinoType::T,
                 orientation: Orientation::North,
                 x: 3,
                 y: 19,
             },
-            spin: Spin::None,
+            spin: BotSpin::None,
         };
         let mut bot = StubBot::new(vec![mv]);
-        session.step_bot(0, &mut bot);
+        session.step_bot(0, &mut bot).await;
         // Move was consumed (Vec was moved out)
         assert_eq!(bot.suggests, 1);
     }
 
     // -------- apply_bot_move --------
 
-    fn bot_move(kind: MinoType, orient: Orientation, x: i8, y: i8) -> Move {
-        Move {
-            location: PieceLocation {
+    fn bot_move(kind: MinoType, orient: Orientation, x: i8, y: i8) -> BotMove {
+        BotMove {
+            location: BotPieceLocation {
                 kind,
                 orientation: orient,
                 x,
                 y,
             },
-            spin: Spin::None,
+            spin: BotSpin::None,
         }
     }
 

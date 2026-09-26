@@ -11,7 +11,7 @@ pub use constants::{
 };
 pub use piece::Piece;
 pub use player::{PendingGarbage, Phase, Player};
-pub use ports::bot::{BotError, BotTransport, Move, PieceLocation, Spin};
+pub use ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
 pub use ports::clock::Clock;
 pub use ports::input::{Input, InputSource};
 pub use ports::renderer::{Frame, Layout, PlayerView, Renderer};

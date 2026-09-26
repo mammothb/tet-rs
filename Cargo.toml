@@ -8,8 +8,19 @@ rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]
-tet-domain = {  path = "crates/tet-domain" }
-thiserror = "2.0.21"
+tet-application = { path = "crates/tet-application" }
+tet-domain = { path = "crates/tet-domain" }
+tet-infrastructure = { path = "crates/tet-infrastructure" }
+
+async-trait = { version = "0.1.92" }
+rand = { version = "0.10.3" }
+serde = { version = "1.0.229" }
+serde_json = { version = "1.0.151" }
+tbp = { version = "3.0.0" }
+thiserror = { version = "2.0.21" }
+tokio = { version = "1.53.1", features = ["process", "io-util", "rt-multi-thread", "macros"] }
+tracing = { version = "0.1.44" }
+tracing-subscriber = { version = "0.3.23" }
 
 # dev dependencies
 rstest = { version = "0.27.0" }
