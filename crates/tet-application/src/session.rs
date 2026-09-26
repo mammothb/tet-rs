@@ -2,8 +2,8 @@ use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
 
 use crate::tick;
 use crate::{
-    ATTACK_FOR_LINES, BotMove, BotTransport, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase,
-    Piece, Player, PlayerSnapshot, TickResult,
+    ATTACK_FOR_LINES, BotMove, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase, Piece, Player,
+    PlayerSnapshot, TickResult,
 };
 
 pub struct GameSession<R: Rng> {
@@ -61,31 +61,6 @@ impl<R: Rng> GameSession<R> {
 
         // 4. Distribute new attacks from line clears to all opponents.
         self.distribute_garbage(&results);
-    }
-
-    /// Drive a bot: take snapshot, ask transport for moves, apply first
-    /// valid one. (For when the session is in control of the bot loop.)
-    /// Drive a bot: take snapshot, ask transport for moves, apply first
-    /// valid one. (For when the session is in control of the bot loop.)
-    ///
-    /// Async because `BotTransport::update` and `suggest` are async (do I/O).
-    /// See `tet-application/Cargo.toml` for the `tokio` runtime.
-    pub async fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
-        let snap = self.snapshot(idx);
-        let _ = bot.update(&snap).await;
-
-        let Ok(moves) = bot.suggest().await else {
-            return;
-        };
-
-        // Try each move in preference order; first valid one wins.
-        for mv in moves {
-            if apply_bot_move(&mut self.players[idx], mv, &self.ruleset).is_some() {
-                return;
-            }
-        }
-        // All suggested moves were invalid (board state changed under bot);
-        // next `suggest` will see updated state.
     }
 
     /// Apply a discrete human input to one player.
@@ -246,6 +221,7 @@ mod test {
     use crate::PendingGarbage;
     use crate::TSpinStatus;
     use crate::player::{Controller, Player};
+    use crate::ports::bot::BotTransport;
     use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
@@ -268,6 +244,37 @@ mod test {
             let v = self.values[self.idx % self.values.len()];
             self.idx += 1;
             v
+        }
+    }
+
+    impl<R: Rng> GameSession<R> {
+        /// Drive a bot synchronously: take snapshot, ask transport for moves,
+        /// apply first valid one. Test-only — doesn't exist in release builds.
+        ///
+        /// **Not for production use.** Production uses worker threads on a
+        /// side tokio runtime — see `PROPOSAL-domain-next-steps.md` §7.
+        ///
+        /// The orchestration logic (update → suggest → apply, with error
+        /// handling) is real and worth testing as a unit, but the method
+        /// itself only exists for tests and headless tools (CLI replay, fuzz
+        /// harnesses). If a headless tool needs this in production, we promote
+        /// it from `#[cfg(test)]` to a regular `pub` method at that point.
+        async fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
+            let snap = self.snapshot(idx);
+            let _ = bot.update(&snap).await;
+
+            let Ok(moves) = bot.suggest().await else {
+                return;
+            };
+
+            // Try each move in preference order; first valid one wins.
+            for mv in moves {
+                if apply_bot_move(&mut self.players[idx], mv, &self.ruleset).is_some() {
+                    return;
+                }
+            }
+            // All suggested moves were invalid (board state changed under bot);
+            // next `suggest` will see updated state.
         }
     }
 
