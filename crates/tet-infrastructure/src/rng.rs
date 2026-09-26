@@ -7,7 +7,7 @@ pub struct SmallRng(InnerRng);
 
 impl SmallRng {
     pub fn new(seed: Option<u64>) -> (u64, Self) {
-        let seed = seed.unwrap_or_else(|| rand::random());
+        let seed = seed.unwrap_or_else(rand::random);
         (seed, Self(InnerRng::seed_from_u64(seed)))
     }
 }

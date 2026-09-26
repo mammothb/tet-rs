@@ -23,6 +23,12 @@ impl Board {
         }
     }
 
+    /// Iterator over all rows, bottom (y=0) to top (y=num_rows-1).
+    /// Each item is a slice of `num_cols` cells.
+    pub fn rows(&self) -> impl Iterator<Item = &[Cell]> + '_ {
+        self.grid.iter().map(Vec::as_slice)
+    }
+
     #[must_use]
     pub fn get(&self, p: Vec2) -> Cell {
         let (Ok(x), Ok(y)) = (usize::try_from(p.x), usize::try_from(p.y)) else {
