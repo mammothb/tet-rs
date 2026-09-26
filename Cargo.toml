@@ -13,12 +13,13 @@ tet-domain = { path = "crates/tet-domain" }
 tet-infrastructure = { path = "crates/tet-infrastructure" }
 
 async-trait = { version = "0.1.92" }
+macroquad = { version = "0.4.16" }
 rand = { version = "0.10.3" }
 serde = { version = "1.0.229" }
 serde_json = { version = "1.0.151" }
 tbp = { version = "3.0.0" }
 thiserror = { version = "2.0.21" }
-tokio = { version = "1.53.1", features = ["process", "io-util", "rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync"] }
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23" }
 

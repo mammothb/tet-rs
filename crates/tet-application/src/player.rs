@@ -43,3 +43,53 @@ pub struct Player<R: Rng> {
     /// RNG used to generate attack hole columns.
     pub attack_rng: R,
 }
+
+impl<R: Rng> Player<R> {
+    /// Build a new human-controlled player with an empty board, a fresh
+    /// 5-piece queue, and the given RNGs for queue generation and attack
+    /// hole column selection. Spawns a T-piece as the active piece
+    /// (matches guideline convention).
+    ///
+    /// Two RNGs because `Player<R>` stores both as owned values: one in
+    /// `queue: Queue<R>`, the other as `attack_rng: R`. Since `R: Rng` doesn't
+    /// require `Clone`, we can't share one.
+    pub fn new_human(queue_rng: R, attack_rng: R) -> Self {
+        Self {
+            board: Board::new(10, 25),
+            current: Piece::spawn(MinoType::T),
+            queue: Queue::new(queue_rng, 5),
+            hold: None,
+            hold_used: false,
+            score: 0,
+            lines: 0,
+            combo: 0,
+            b2b: false,
+            lock_delay: 0,
+            phase: Phase::Playing,
+            controller: Controller::Human,
+            pending_garbage: Vec::new(),
+            attack_rng,
+        }
+    }
+
+    /// Build a new bot-controlled player with the given `BotTransport`.
+    /// Same two-RNG split as `new_human`.
+    pub fn new_bot(queue_rng: R, attack_rng: R, bot: Box<dyn BotTransport>) -> Self {
+        Self {
+            board: Board::new(10, 25),
+            current: Piece::spawn(MinoType::T),
+            queue: Queue::new(queue_rng, 5),
+            hold: None,
+            hold_used: false,
+            score: 0,
+            lines: 0,
+            combo: 0,
+            b2b: false,
+            lock_delay: 0,
+            phase: Phase::Playing,
+            controller: Controller::Bot(bot),
+            pending_garbage: Vec::new(),
+            attack_rng,
+        }
+    }
+}
