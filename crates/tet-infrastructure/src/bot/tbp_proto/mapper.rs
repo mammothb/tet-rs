@@ -81,6 +81,12 @@ pub fn bot_move_to_tbp(m: BotMove) -> TbpMove {
 }
 
 /// Inbound: `TbpMove` → `BotMove`. Fallible: TBP may carry `Unknown` variants.
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: any nested field (spin, piece kind, orientation, or
+///   coordinate) is `Unknown` from a future-spec bot, or the piece location's
+///   `x`/`y` fall outside the `i8` range we use for world coordinates.
 pub fn tbp_move_to_bot(m: TbpMove) -> Result<BotMove, BotError> {
     let spin = tbp_spin_to_bot(m.spin)?;
     let location = tbp_piece_location_to_bot(m.location)?;
@@ -109,6 +115,11 @@ pub fn bot_piece_location_to_tbp(loc: BotPieceLocation) -> TbpPieceLocation {
 }
 
 /// Inbound: `TbpPieceLocation` → `BotPieceLocation`. Converts TBP center → bbox anchor.
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: the kind or orientation is `Unknown`, or the resulting
+///   bbox anchor coordinate is outside the `i8` range we use.
 pub fn tbp_piece_location_to_bot(loc: TbpPieceLocation) -> Result<BotPieceLocation, BotError> {
     let kind = tbp_piece_to_mino_type(loc.kind)?;
     let orientation = tbp_orientation_to_orientation(loc.orientation)?;
@@ -139,6 +150,11 @@ pub fn bot_spin_to_tbp(s: BotSpin) -> TbpSpin {
 }
 
 /// Inbound: `MaybeUnknown<TbpSpin>` → `BotSpin`. Fallible (`Unknown` is desync).
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: the wire-format `spin` was `Unknown` (future-spec variant).
+///   A `Known` value with an unrecognized variant panics via `unreachable!` (a bug).
 pub fn tbp_spin_to_bot(m: MaybeUnknown<TbpSpin>) -> Result<BotSpin, BotError> {
     match m {
         MaybeUnknown::Known(s) => match s {
@@ -169,6 +185,11 @@ pub fn mino_type_to_tbp_piece(m: MinoType) -> TbpPiece {
 }
 
 /// Inbound: `MaybeUnknown<TbpPiece>` → `MinoType`. Fallible (`Unknown` is desync).
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: the wire-format `kind` was `Unknown` (future-spec variant).
+///   A `Known` value with an unrecognized variant panics via `unreachable!` (a bug).
 pub fn tbp_piece_to_mino_type(m: MaybeUnknown<TbpPiece>) -> Result<MinoType, BotError> {
     match m {
         MaybeUnknown::Known(p) => match p {
@@ -202,6 +223,12 @@ pub fn orientation_to_tbp_orientation(o: Orientation) -> TbpOrientation {
 }
 
 /// Inbound: `MaybeUnknown<TbpOrientation>` → `Orientation`. Fallible.
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: the wire-format `orientation` was `Unknown` (future-spec
+///   variant). A `Known` value with an unrecognized variant panics via
+///   `unreachable!` (a bug).
 pub fn tbp_orientation_to_orientation(
     m: MaybeUnknown<TbpOrientation>,
 ) -> Result<Orientation, BotError> {
@@ -233,6 +260,11 @@ pub fn cell_to_tbp(c: &Cell) -> Option<&'static str> {
 
 /// Inbound: TBP cell → `Cell`. `None` → `Empty`; `Some('G')` → `Garbage`;
 /// `Some(piece_letter)` → `Block(piece)`; anything else → `BotError::Protocol`.
+///
+/// # Errors
+///
+/// - `BotError::Protocol`: the char is not a recognized piece letter (`'G'` for
+///   garbage is handled separately).
 pub fn cell_from_tbp(c: Option<char>) -> Result<Cell, BotError> {
     match c {
         None => Ok(Cell::Empty),
