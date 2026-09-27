@@ -100,6 +100,10 @@ impl<R: Rng> GameSession<R> {
                 tick::post_lock(&mut self.players[idx], &result, &self.ruleset);
                 Some(result)
             }
+            Input::StepGravity => {
+                tick::step_gravity(&mut self.players[idx]);
+                None
+            }
         }
     }
 
