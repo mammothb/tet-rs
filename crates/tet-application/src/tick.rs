@@ -17,6 +17,13 @@ pub struct TickResult {
     pub piece_locked: bool,
 }
 
+/// One frame of per-player state updates: increment `lock_delay` if the piece
+/// can't fall, lock and respawn when the delay expires.
+///
+/// **Does not apply gravity.** Gravity is the composition root's responsibility
+/// (driven by its `Timer`); it routes gravity shifts through
+/// `apply_input(StepGravity)` which calls `step_gravity`. This function only
+/// handles the lock-delay timer.
 pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickResult {
     let mut result = TickResult {
         lines_cleared: 0,
@@ -28,7 +35,7 @@ pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickRes
         return result;
     }
 
-    if step_gravity(player) {
+    if piece_can_fall(player) {
         player.lock_delay = 0;
     } else {
         player.lock_delay += 1;
@@ -41,18 +48,20 @@ pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickRes
     result
 }
 
+/// True if shifting the active piece down by 1 cell wouldn't collide with the
+/// board. Does not mutate the piece.
+pub fn piece_can_fall<R: Rng>(player: &Player<R>) -> bool {
+    let mut shifted = player.current;
+    shifted.shift(v2![0, -1]);
+    !player.board.collides(&shifted.cells().collect::<Vec<_>>())
+}
+
 pub fn step_gravity<R: Rng>(player: &mut Player<R>) -> bool {
-    let orig_pos = player.current.pos;
-    player.current.shift(v2![0, -1]);
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
-        player.current.pos = orig_pos;
-        false
-    } else {
-        true
+    if !piece_can_fall(player) {
+        return false;
     }
+    player.current.shift(v2![0, -1]);
+    true
 }
 
 pub fn apply_horizontal_input<R: Rng>(player: &mut Player<R>, dx: i8) -> bool {

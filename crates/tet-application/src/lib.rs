@@ -8,6 +8,7 @@ pub mod tick;
 
 pub use constants::{
     ARR_FRAMES, ATTACK_FOR_LINES, DAS_FRAMES, GARBAGE_DELAY_FRAMES, GRAVITY_MS, LOCK_DELAY_FRAMES,
+    SDF_FRAMES,
 };
 pub use piece::Piece;
 pub use player::{PendingGarbage, Phase, Player};

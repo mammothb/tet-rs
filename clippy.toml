@@ -1,3 +1,9 @@
+# `main()` in `tet-app` is over 100 lines because it owns the entire frame loop
+# (input → timer → bots → step → render). `#[allow]` doesn't propagate through
+# `#[macroquad::main]`'s proc macro. Bumping the threshold here until §5.1
+# (extract rendering into `tet-app/src/render.rs`) lands.
+too-many-lines-threshold = 150
+
 disallowed-types = [
   { path = "std::fs::DirEntry", allow-invalid = true },
   { path = "std::fs::File", allow-invalid = true },

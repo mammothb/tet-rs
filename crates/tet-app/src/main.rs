@@ -1,13 +1,18 @@
+mod timer;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Instant;
 
 use macroquad::prelude::*;
 use tet_application::{
-    BotError, BotMove, BotTransport, GameSession, Input, Player, PlayerSnapshot, session,
+    BotError, BotMove, BotTransport, GameSession, Player, PlayerSnapshot, session,
 };
 use tet_domain::{Cell, MinoType, Ruleset};
 use tet_infrastructure::{BotSubprocess, SmallRng};
 use tokio::sync::{mpsc as tmpsc, oneshot};
+
+use timer::{InputState, Timer};
 
 #[derive(Clone)]
 struct BotHandle {
@@ -93,23 +98,20 @@ fn piece_color(t: MinoType) -> Color {
     }
 }
 
-fn handle_input() -> Input {
-    if is_key_down(KeyCode::Left) {
-        Input::MoveLeft
-    } else if is_key_down(KeyCode::Right) {
-        Input::MoveRight
-    } else if is_key_down(KeyCode::Down) {
-        Input::SoftDrop
-    } else if is_key_pressed(KeyCode::Space) {
-        Input::HardDrop
-    } else if is_key_down(KeyCode::F) {
-        Input::RotateCW
-    } else if is_key_down(KeyCode::D) {
-        Input::RotateCCW
-    } else if is_key_pressed(KeyCode::S) {
-        Input::Hold
-    } else {
-        Input::None
+/// Read the keyboard state and produce an `InputState` for the timer.
+///
+/// Edge-triggered inputs use `is_key_pressed` (true for one frame); held inputs
+/// use `is_key_down` (true every frame). The timer decides what to emit based
+/// on this state and elapsed time.
+fn collect_input_state() -> InputState {
+    InputState {
+        move_left_held: is_key_down(KeyCode::Left),
+        move_right_held: is_key_down(KeyCode::Right),
+        soft_drop_held: is_key_down(KeyCode::Down),
+        rotate_cw_pressed: is_key_pressed(KeyCode::F),
+        rotate_ccw_pressed: is_key_pressed(KeyCode::D),
+        hard_drop_pressed: is_key_pressed(KeyCode::Space),
+        hold_pressed: is_key_pressed(KeyCode::S),
     }
 }
 
@@ -129,8 +131,13 @@ async fn main() {
     let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
+    let mut timer = Timer::new();
+    let mut last_frame_at = Instant::now();
 
     loop {
+        let frame_delta_ms = last_frame_at.elapsed().as_secs_f32() * 1000.0;
+        last_frame_at = Instant::now();
+
         // Drain any pending bot responses (non-blocking)
         for (session_idx, handle) in &bot_handles {
             while let Ok(resp) = handle.resp_rx.lock().unwrap().try_recv() {
@@ -141,11 +148,25 @@ async fn main() {
             }
         }
 
-        // Collect human input (no InputSource trait yet)
-        let input = handle_input();
-        session.apply_input(human_idx, input);
+        // Timer emits human inputs and a gravity flag.
+        let input_state = collect_input_state();
+        let tick = timer.tick(input_state, frame_delta_ms);
 
-        // Step the game state
+        // Apply timer-emitted inputs to the human only.
+        for input in tick.inputs {
+            session.apply_input(human_idx, input);
+        }
+
+        // Gravity is global — applies to every playing player.
+        if tick.fire_gravity {
+            let n = session.players.len();
+            for idx in 0..n {
+                session.apply_input(idx, tet_application::Input::StepGravity);
+            }
+        }
+
+        // Frame tick: garbage arrival, lock-delay accounting, line-clear
+        // distribution. Does NOT apply gravity — that's the timer's job.
         session.step_frame();
 
         // For each bot: send update + suggest (non-blocking)
@@ -184,6 +205,7 @@ async fn main() {
         for (idx, player) in session.players.iter().enumerate() {
             let x0 = idx as f32 * (board_w + 16.0);
             draw_rectangle_lines(x0, 0.0, board_w, board_h, 1.0, GRAY);
+            // Locked cells first (drawn underneath).
             for (y, row) in player.board.rows().enumerate() {
                 for (x, cell) in row.iter().enumerate() {
                     let screen_y = board_h - (y as f32 + 1.0) * cell_px;
@@ -195,6 +217,15 @@ async fn main() {
                     };
                     draw_rectangle(screen_x, screen_y, cell_px, cell_px, color);
                 }
+            }
+            // Active piece on top, same Y-flip.
+            let piece_color = piece_color(player.current.kind);
+            for cell_pos in player.current.cells() {
+                #[allow(clippy::cast_precision_loss)]
+                let screen_x = x0 + f32::from(cell_pos.x) * cell_px;
+                #[allow(clippy::cast_precision_loss)]
+                let screen_y = board_h - (f32::from(cell_pos.y) + 1.0) * cell_px;
+                draw_rectangle(screen_x, screen_y, cell_px, cell_px, piece_color);
             }
         }
         draw_text(
