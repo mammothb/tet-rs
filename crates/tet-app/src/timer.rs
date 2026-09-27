@@ -151,8 +151,8 @@ impl Timer {
         }
 
         // 3. Soft drop. While held, fires every `GRAVITY_MS / SDF_FRAMES` ms.
-        //    SDF_FRAMES = 1 currently → soft drop = gravity speed. SDF > 1
-        //    makes soft drop faster than gravity (canonical guideline uses SDF=15).
+        //    Independent of gravity — both can fire in the same tick.
+        //    With SDF=15, that's ~15 cells/sec on top of the 1 cell/sec gravity.
         let soft_drop_interval_ms = GRAVITY_MS / u32::from(SDF_FRAMES);
         if state.soft_drop_held {
             let last = self.last_soft_drop_at.unwrap_or(self.last_gravity_at);
@@ -166,15 +166,10 @@ impl Timer {
             self.last_soft_drop_at = None;
         }
 
-        // 4. Gravity. While soft drop is held, uses the soft-drop interval
-        //    (faster fall); otherwise uses the normal gravity interval.
-        let gravity_interval_ms = if state.soft_drop_held {
-            soft_drop_interval_ms
-        } else {
-            GRAVITY_MS
-        };
+        // 4. Gravity. Always uses `GRAVITY_MS` regardless of soft drop.
+        //    Soft drop is additive (separate timer above), not a replacement.
         let fire_gravity = u32::try_from(now.duration_since(self.last_gravity_at).as_millis())
-            .map_or(true, |ms| ms >= gravity_interval_ms);
+            .map_or(true, |ms| ms >= GRAVITY_MS);
         if fire_gravity {
             self.last_gravity_at = now;
         }
@@ -368,17 +363,17 @@ mod test {
             ..no_input()
         };
         let tick = timer.tick(state, FRAME_MS);
-        // SDF_FRAMES = 1 currently → soft drop interval = GRAVITY_MS = 1000ms.
-        // No time has elapsed on first tick.
+        // No time has elapsed on first tick, so soft drop hasn't fired yet
+        // even though `Down` is held.
         assert!(tick.inputs.is_empty());
     }
 
     #[test]
     fn soft_drop_fires_after_interval() {
-        // SDF = 1 means soft drop fires every 1000ms (same as gravity).
-        // Real-time test for the interval check.
+        // SDF = 15 → soft drop interval = 1000 / 15 ≈ 67ms. Sleeping 100ms is
+        // enough to trigger it; we use 150 for slack.
         let mut timer = Timer::new();
-        std::thread::sleep(std::time::Duration::from_millis(1050));
+        std::thread::sleep(std::time::Duration::from_millis(150));
         let state = InputState {
             soft_drop_held: true,
             ..no_input()
@@ -404,9 +399,10 @@ mod test {
     // -------- soft drop accelerating gravity --------
 
     #[test]
-    fn holding_soft_drop_gravity_uses_soft_drop_interval() {
-        // SDF = 1 → soft-drop interval equals gravity interval.
-        // We verify the TIMING is what changes, not the value.
+    fn gravity_fires_independently_of_soft_drop() {
+        // Gravity uses its own `GRAVITY_MS` cadence — it does NOT speed up
+        // when soft drop is held. Soft drop is additive (fires its own
+        // `Input::SoftDrop` shifts), not a replacement for gravity.
         // After 1050ms with soft_drop held, gravity should fire (uses 1000ms).
         let mut timer = Timer::new();
         std::thread::sleep(std::time::Duration::from_millis(1050));
