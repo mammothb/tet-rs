@@ -47,17 +47,19 @@ pub struct Player<R: Rng> {
 impl<R: Rng> Player<R> {
     /// Build a new human-controlled player with an empty board, a fresh
     /// 5-piece queue, and the given RNGs for queue generation and attack
-    /// hole column selection. Spawns a T-piece as the active piece
-    /// (matches guideline convention).
+    /// hole column selection. The active piece is drawn from the queue
+    /// (first bag piece).
     ///
     /// Two RNGs because `Player<R>` stores both as owned values: one in
     /// `queue: Queue<R>`, the other as `attack_rng: R`. Since `R: Rng` doesn't
     /// require `Clone`, we can't share one.
     pub fn new_human(queue_rng: R, attack_rng: R) -> Self {
+        let mut queue = Queue::new(queue_rng, 5);
+        let current = Piece::spawn(queue.take());
         Self {
             board: Board::new(10, 25),
-            current: Piece::spawn(MinoType::T),
-            queue: Queue::new(queue_rng, 5),
+            current,
+            queue,
             hold: None,
             hold_used: false,
             score: 0,
@@ -73,12 +75,15 @@ impl<R: Rng> Player<R> {
     }
 
     /// Build a new bot-controlled player with the given `BotTransport`.
-    /// Same two-RNG split as `new_human`.
+    /// Same two-RNG split as `new_human`. Active piece is drawn from the
+    /// queue (first bag piece).
     pub fn new_bot(queue_rng: R, attack_rng: R, bot: Box<dyn BotTransport>) -> Self {
+        let mut queue = Queue::new(queue_rng, 5);
+        let current = Piece::spawn(queue.take());
         Self {
             board: Board::new(10, 25),
-            current: Piece::spawn(MinoType::T),
-            queue: Queue::new(queue_rng, 5),
+            current,
+            queue,
             hold: None,
             hold_used: false,
             score: 0,

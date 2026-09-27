@@ -333,7 +333,9 @@ mod test {
     }
 
     /// Player with a T-piece at spawn position on an empty 10×25 board.
-    /// Queue is filled from the deterministic RNG.
+    /// Queue is filled from the deterministic RNG. The T-piece is hardcoded
+    /// here (not from the queue) because tests that use this fixture want
+    /// a guaranteed T-piece setup.
     fn t_player() -> Player<StubRng> {
         Player {
             board: Board::new(10, 25),
