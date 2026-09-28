@@ -351,7 +351,7 @@ mod test {
             lines: 0,
             combo: 0,
             b2b: false,
-            lock_delay: 0,
+            lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(StubBot::empty())),
             pending_garbage: Vec::new(),
@@ -426,13 +426,34 @@ mod test {
     }
 
     #[rstest]
-    fn step_frame_advances_lock_delay_when_piece_cant_move_down() {
+    fn step_frame_starts_lock_timer_when_piece_cant_move_down() {
         let mut session = t_session();
         // T-piece bbox at pos.y = -1 places cells at world y=0,0,0,1.
         // Stepping down would put them at y=-1 (OOB).
         session.players[0].current.pos = v2![3, -1];
+        // No time has elapsed, so the lock timer should be set to `now`
+        // (just grounded). It shouldn't fire yet (elapsed < LOCK_DELAY_MS).
+        let before = Instant::now();
+        session.step_frame(before);
+        assert!(session.players[0].lock_grounded_at.is_some());
+    }
+
+    #[rstest]
+    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
+    fn step_frame_locks_piece_after_lock_delay_elapses() {
+        let mut session = t_session();
+        // Place piece on the floor so it can't fall.
+        session.players[0].current.pos = v2![3, -1];
+        // Anchor the timer 550ms in the past so the lock delay has elapsed.
+        session.players[0].lock_grounded_at =
+            Some(Instant::now() - std::time::Duration::from_millis(550));
         session.step_frame(Instant::now());
-        assert_eq!(session.players[0].lock_delay, 1);
+        // After lock + spawn, the piece's lock timer is reset to None
+        // (next piece hasn't been grounded yet).
+        assert!(
+            session.players[0].lock_grounded_at.is_none(),
+            "lock_grounded_at should be None after lock + spawn"
+        );
     }
 
     #[rstest]
@@ -442,8 +463,8 @@ mod test {
         let initial_frame = session.frame;
         session.step_frame(Instant::now());
         assert_eq!(session.frame, initial_frame + 1);
-        // Player's lock_delay was 0; stays 0 (skipped)
-        assert_eq!(session.players[0].lock_delay, 0);
+        // Player's lock_grounded_at was None; stays None (skipped).
+        assert!(session.players[0].lock_grounded_at.is_none());
     }
 
     // -------- snapshot --------

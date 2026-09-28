@@ -43,7 +43,10 @@ pub fn apply_horizontal_input<R: Rng>(player: &mut Player<R>, dx: i8) -> bool {
         player.current.pos = original;
         false
     } else {
-        player.lock_delay = 0;
+        // Successful shift — restart the lock timer if the piece is still
+        // grounded (the next `step_player` call clears it if the piece
+        // lifted into the air).
+        player.lock_grounded_at = Some(std::time::Instant::now());
         true
     }
 }
@@ -65,7 +68,9 @@ pub fn apply_rotation_input<R: Rng>(
             .board
             .collides(&player.current.cells().collect::<Vec<_>>())
         {
-            player.lock_delay = 0;
+            // Successful rotation — restart the lock timer if the piece is
+            // still grounded (next `step_player` clears it if the piece lifted).
+            player.lock_grounded_at = Some(std::time::Instant::now());
             return true;
         }
     }
@@ -172,7 +177,9 @@ pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
         }
     };
     player.current = Piece::spawn(new_kind);
-    player.lock_delay = 0;
+    // New piece starts fresh — no lock timer yet (next step_player call
+    // sets it if the new piece spawns grounded).
+    player.lock_grounded_at = None;
     player.hold_used = true;
     if player
         .board
@@ -268,7 +275,7 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
 mod test {
     use super::*;
 
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use rstest::rstest;
 
@@ -319,7 +326,7 @@ mod test {
             lines: 0,
             combo: 0,
             b2b: false,
-            lock_delay: 0,
+            lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(NoopBot)),
             pending_garbage: Vec::new(),
@@ -402,11 +409,23 @@ mod test {
     }
 
     #[rstest]
-    fn apply_horizontal_input_resets_lock_delay_on_success() {
+    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
+    fn apply_horizontal_input_restarts_lock_timer_on_success() {
+        // Set the lock timer to a moment long ago — it's about to fire.
+        // After a successful shift, the timer should be reset to "now".
         let mut p = t_player();
-        p.lock_delay = 15;
+        p.lock_grounded_at = Some(Instant::now() - Duration::from_secs(10));
         assert!(apply_horizontal_input(&mut p, 1));
-        assert_eq!(p.lock_delay, 0);
+        // The timer is now Some(very recent Instant). We can't pin the exact
+        // value, but it should be within a few seconds of "now".
+        let grounded_at = p
+            .lock_grounded_at
+            .expect("lock_grounded_at should be Some after successful shift");
+        let age = Instant::now().duration_since(grounded_at);
+        assert!(
+            age < Duration::from_secs(1),
+            "lock timer should be recent, was {age:?} ago"
+        );
     }
 
     // -------- apply_rotation_input --------
@@ -604,11 +623,13 @@ mod test {
     }
 
     #[rstest]
-    fn try_hold_resets_lock_delay() {
+    fn try_hold_clears_lock_timer() {
+        // Piece is grounded with timer set. After hold, the timer should
+        // be cleared — the new piece hasn't been grounded yet.
         let mut p = t_player();
-        p.lock_delay = 20;
+        p.lock_grounded_at = Some(Instant::now());
         try_hold(&mut p);
-        assert_eq!(p.lock_delay, 0);
+        assert!(p.lock_grounded_at.is_none());
     }
 
     // -------- update_score (via try_lock + cancel + score flow) --------
