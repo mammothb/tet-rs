@@ -148,7 +148,8 @@ async fn main() {
             }
         }
 
-        // Timer emits human inputs and a gravity flag.
+        // Timer translates keyboard state into inputs. Each Player owns
+        // its own gravity clock; the Timer handles input-side timing only.
         let input_state = collect_input_state();
         let tick = timer.tick(input_state, frame_delta_ms);
 
@@ -157,17 +158,10 @@ async fn main() {
             session.apply_input(human_idx, input);
         }
 
-        // Gravity is global — applies to every playing player.
-        if tick.fire_gravity {
-            let n = session.players.len();
-            for idx in 0..n {
-                session.apply_input(idx, tet_application::Input::StepGravity);
-            }
-        }
-
-        // Frame tick: garbage arrival, lock-delay accounting, line-clear
-        // distribution. Does NOT apply gravity — that's the timer's job.
-        session.step_frame();
+        // Frame tick: garbage arrival, per-player game state (including
+        // gravity timing), line-clear distribution. Each Player advances
+        // its own gravity clock via `step_player`.
+        session.step_frame(Instant::now());
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {

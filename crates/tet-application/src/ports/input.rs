@@ -8,10 +8,6 @@ pub enum Input {
     SoftDrop,
     HardDrop,
     Hold,
-    /// Emitted by the composition root's timer when `GRAVITY_MS` has elapsed
-    /// since the last gravity tick. Routes to `tick::step_gravity`. Not
-    /// produced by keyboard polling — humans get gravity via the timer too.
-    StepGravity,
 }
 
 pub trait InputSource {

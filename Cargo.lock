@@ -672,6 +672,7 @@ name = "tet-app"
 version = "0.1.0"
 dependencies = [
  "macroquad",
+ "rstest",
  "tet-application",
  "tet-domain",
  "tet-infrastructure",

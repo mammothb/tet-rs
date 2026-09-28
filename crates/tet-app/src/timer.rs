@@ -1,13 +1,15 @@
 //! Per-frame timing for the macroquad main loop.
 //!
-//! Mirrors Blockfish's `blockfish-client/src/timer.rs`: the UI thread runs at
-//! display vsync (~60fps via `next_frame().await`), the `Timer` polls elapsed
-//! time each frame, and emits `Input`s for time-driven events (gravity, soft
-//! drop, DAS/ARR repeat). Edge-triggered inputs (rotate, hard drop, hold) pass
-//! through immediately.
+//! The Timer translates keyboard state into `Input` events. It's strictly an
+//! input-concern component: edge-triggered events (rotate, hard drop, hold)
+//! pass through immediately, DAS/ARR add repeats on held movement keys, and
+//! soft drop emits at its own cadence while held.
 //!
-//! The composition root (main loop) takes the output and routes each input to
-//! the right player via `session.apply_input`.
+//! **Gravity timing lives in `tet-application::Player`, not here.** Each
+//! `Player::step_player` ticks its own `last_gravity_at` clock. This split
+//! mirrors Blockfish's architecture: the engine owns game timing, the UI owns
+//! input timing. The two never bleed into each other, which prevents the
+//! "soft drop coupling breaks gravity" class of bug.
 
 use std::time::Instant;
 
@@ -15,13 +17,11 @@ use tet_application::{ARR_FRAMES, DAS_FRAMES, GRAVITY_MS, Input, SDF_FRAMES};
 
 /// Approximate ms per frame at 60fps. Used for converting frame-based constants
 /// (DAS, ARR) to milliseconds without pulling in `Instant`-based math at the
-/// call site. Slightly off if the display isn't 60Hz — that's fine for first
-/// slice; the timer measures real elapsed time anyway.
+/// call site.
 const MS_PER_FRAME: f32 = 1000.0 / 60.0;
 
 /// Lossless cast from a positive f32 to u32. Used for the `MS_PER_FRAME`
-/// constant, which is always a small positive value. Pedantic clippy flags
-/// every `as u32` from f32; this helper documents the invariant.
+/// constant, which is always a small positive value.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 const fn f32_to_u32(v: f32) -> u32 {
     v as u32
@@ -51,51 +51,41 @@ enum Direction {
     Right,
 }
 
-/// Output of one tick of the timer.
-///
-/// - `inputs`: apply each to the **human player** via `session.apply_input(human_idx, input)`.
-/// - `fire_gravity`: if true, apply `Input::StepGravity` to **every playing
-///   player**. Gravity is global — bots and humans fall at the same rate.
+/// Output of one tick of the timer: a list of `Input` events to apply to the
+/// human player via `session.apply_input(human_idx, input)`. No `fire_gravity`
+/// — gravity is owned by `Player::step_player`.
 pub struct TimerTick {
     pub inputs: Vec<Input>,
-    pub fire_gravity: bool,
 }
 
 pub struct Timer {
-    last_gravity_at: Instant,
-    /// `None` when soft drop isn't held. Reset to `None` on key release so the
-    /// first frame of re-press doesn't double-fire.
-    last_soft_drop_at: Option<Instant>,
     /// `Some((direction, instant_of_first_shift))` once a horizontal key has
     /// been held long enough to register the first shift. Reset on release.
     last_shift_at: Option<(Direction, Instant)>,
-    /// Carry-over ms when `ARR_FRAMES` doesn't divide cleanly into the frame
-    /// delta. Lets the timer emit fractional ARR shifts over multi-frame windows.
+    /// Carry-over ms when ARR doesn't divide cleanly into the frame delta.
     arr_accumulator_ms: f32,
+    /// Carry-over ms when `SDF_FRAMES` doesn't divide cleanly into the frame delta.
+    soft_drop_accumulator_ms: f32,
 }
 
 impl Timer {
     pub fn new() -> Self {
-        let now = Instant::now();
         Self {
-            last_gravity_at: now,
-            last_soft_drop_at: None,
             last_shift_at: None,
             arr_accumulator_ms: 0.0,
+            soft_drop_accumulator_ms: 0.0,
         }
     }
 
-    /// One tick of the timer. Returns inputs to apply to the human and a flag
-    /// for whether to fire global gravity.
+    /// One tick of the timer. Returns inputs to apply to the human.
     ///
     /// `frame_delta_ms`: time elapsed since the last call to `tick`. Used to
-    /// accumulate partial ARR frames. Typically `next_frame()` returns ~16.67ms
-    /// at 60fps.
+    /// accumulate partial ARR and soft-drop frames.
     pub fn tick(&mut self, state: InputState, frame_delta_ms: f32) -> TimerTick {
         let now = Instant::now();
         let mut inputs = Vec::new();
 
-        // 1. Edge-triggered inputs (independent of timer)
+        // 1. Edge-triggered inputs (independent of timer).
         if state.rotate_cw_pressed {
             inputs.push(Input::RotateCW);
         }
@@ -109,7 +99,7 @@ impl Timer {
             inputs.push(Input::Hold);
         }
 
-        // 2. DAS / ARR for held horizontal movement
+        // 2. DAS / ARR for held horizontal movement.
         let held_dir = match (state.move_left_held, state.move_right_held) {
             (true, false) => Some(Direction::Left),
             (false, true) => Some(Direction::Right),
@@ -150,34 +140,22 @@ impl Timer {
             self.arr_accumulator_ms = 0.0;
         }
 
-        // 3. Soft drop. While held, fires every `GRAVITY_MS / SDF_FRAMES` ms.
-        //    Independent of gravity — both can fire in the same tick.
-        //    With SDF=15, that's ~15 cells/sec on top of the 1 cell/sec gravity.
-        let soft_drop_interval_ms = GRAVITY_MS / u32::from(SDF_FRAMES);
+        // 3. Soft drop. While held, fires at SDF cadence (every
+        //    `GRAVITY_MS / SDF_FRAMES` ms). With SDF=15, that's ~15 cells/sec
+        //    on top of the 1 cell/sec gravity from `Player::step_player`.
         if state.soft_drop_held {
-            let last = self.last_soft_drop_at.unwrap_or(self.last_gravity_at);
-            if u32::try_from(now.duration_since(last).as_millis())
-                .map_or(true, |ms| ms >= soft_drop_interval_ms)
-            {
+            #[allow(clippy::cast_precision_loss)]
+            let sdf_interval_ms = GRAVITY_MS as f32 / f32::from(SDF_FRAMES);
+            self.soft_drop_accumulator_ms += frame_delta_ms;
+            while self.soft_drop_accumulator_ms >= sdf_interval_ms {
                 inputs.push(Input::SoftDrop);
-                self.last_soft_drop_at = Some(now);
+                self.soft_drop_accumulator_ms -= sdf_interval_ms;
             }
         } else {
-            self.last_soft_drop_at = None;
+            self.soft_drop_accumulator_ms = 0.0;
         }
 
-        // 4. Gravity. Always uses `GRAVITY_MS` regardless of soft drop.
-        //    Soft drop is additive (separate timer above), not a replacement.
-        let fire_gravity = u32::try_from(now.duration_since(self.last_gravity_at).as_millis())
-            .map_or(true, |ms| ms >= GRAVITY_MS);
-        if fire_gravity {
-            self.last_gravity_at = now;
-        }
-
-        TimerTick {
-            inputs,
-            fire_gravity,
-        }
+        TimerTick { inputs }
     }
 }
 
@@ -200,6 +178,8 @@ impl Direction {
 mod test {
     use super::*;
 
+    use rstest::rstest;
+
     /// 60fps frame delta in ms.
     const FRAME_MS: f32 = 1000.0 / 60.0;
 
@@ -208,29 +188,9 @@ mod test {
         InputState::default()
     }
 
-    // -------- gravity --------
-
-    #[test]
-    fn first_tick_does_not_fire_gravity() {
-        let mut timer = Timer::new();
-        let tick = timer.tick(no_input(), FRAME_MS);
-        assert!(!tick.fire_gravity);
-        assert!(tick.inputs.is_empty());
-    }
-
-    #[test]
-    fn gravity_fires_after_gravity_interval_elapses() {
-        // DAS = 16 frames, so 16 * 16.67ms = 266ms. We need to wait > GRAVITY_MS
-        // (1000ms). Real-time test, slow but unambiguous.
-        let mut timer = Timer::new();
-        std::thread::sleep(std::time::Duration::from_millis(1050));
-        let tick = timer.tick(no_input(), FRAME_MS);
-        assert!(tick.fire_gravity);
-    }
-
     // -------- edge-triggered inputs --------
 
-    #[test]
+    #[rstest]
     fn rotate_cw_passes_through_immediately() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -241,7 +201,7 @@ mod test {
         assert_eq!(tick.inputs, vec![Input::RotateCW]);
     }
 
-    #[test]
+    #[rstest]
     fn multiple_edge_inputs_emit_in_order() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -251,24 +211,22 @@ mod test {
             ..no_input()
         };
         let tick = timer.tick(state, FRAME_MS);
-        // Order matches the input.rs variant order: RotateCW, RotateCCW, HardDrop, Hold.
         assert_eq!(
             tick.inputs,
             vec![Input::RotateCW, Input::HardDrop, Input::Hold]
         );
     }
 
-    #[test]
+    #[rstest]
     fn no_inputs_when_nothing_held_or_pressed() {
         let mut timer = Timer::new();
         let tick = timer.tick(no_input(), FRAME_MS);
         assert!(tick.inputs.is_empty());
-        assert!(!tick.fire_gravity);
     }
 
     // -------- horizontal shift (DAS / ARR) --------
 
-    #[test]
+    #[rstest]
     fn holding_left_shifts_once_immediately() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -279,7 +237,7 @@ mod test {
         assert_eq!(tick.inputs, vec![Input::MoveLeft]);
     }
 
-    #[test]
+    #[rstest]
     fn holding_left_does_not_repeat_during_das_delay() {
         // DAS = 16 frames ≈ 267ms. We're well within DAS at frame 2.
         let mut timer = Timer::new();
@@ -292,7 +250,7 @@ mod test {
         assert!(tick.inputs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn releasing_left_resets_das() {
         let mut timer = Timer::new();
         let held = InputState {
@@ -306,7 +264,7 @@ mod test {
         assert_eq!(tick.inputs, vec![Input::MoveLeft]);
     }
 
-    #[test]
+    #[rstest]
     fn switching_direction_shifts_and_resets_das() {
         let mut timer = Timer::new();
         let left = InputState {
@@ -322,7 +280,7 @@ mod test {
         assert_eq!(tick.inputs, vec![Input::MoveRight]);
     }
 
-    #[test]
+    #[rstest]
     fn holding_both_directions_emits_no_shift() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -334,19 +292,14 @@ mod test {
         assert!(tick.inputs.is_empty());
     }
 
-    #[test]
+    #[rstest]
     fn das_blocks_repeat_within_window() {
-        // DAS = 16 frames ≈ 267ms. After the first shift, repeat should NOT
-        // fire for at least DAS worth of frames. We can't directly test ARR
-        // shifts without real elapsed time (the DAS check uses Instant::now()),
-        // but we CAN verify the absence of repeats within the DAS window.
         let mut timer = Timer::new();
         let state = InputState {
             move_left_held: true,
             ..no_input()
         };
         let _ = timer.tick(state, FRAME_MS); // first shift
-        // Frame 2-5 (still well within DAS): no shifts.
         for _ in 0..5 {
             let tick = timer.tick(state, FRAME_MS);
             assert!(tick.inputs.is_empty());
@@ -355,62 +308,57 @@ mod test {
 
     // -------- soft drop --------
 
-    #[test]
-    fn soft_drop_does_not_fire_on_first_tick() {
+    #[rstest]
+    fn soft_drop_fires_at_sdf_cadence() {
+        // SDF=15 → soft drop every ~67ms. With a 100ms frame delta,
+        // we should fire exactly 1 soft drop per tick.
         let mut timer = Timer::new();
         let state = InputState {
             soft_drop_held: true,
             ..no_input()
         };
-        let tick = timer.tick(state, FRAME_MS);
-        // No time has elapsed on first tick, so soft drop hasn't fired yet
-        // even though `Down` is held.
-        assert!(tick.inputs.is_empty());
-    }
-
-    #[test]
-    fn soft_drop_fires_after_interval() {
-        // SDF = 15 → soft drop interval = 1000 / 15 ≈ 67ms. Sleeping 100ms is
-        // enough to trigger it; we use 150 for slack.
-        let mut timer = Timer::new();
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let state = InputState {
-            soft_drop_held: true,
-            ..no_input()
-        };
-        let tick = timer.tick(state, FRAME_MS);
+        // First tick: soft drop fires (100ms >= 67ms threshold).
+        let tick = timer.tick(state, 100.0);
+        assert!(tick.inputs.contains(&Input::SoftDrop));
+        // Should fire ~1 drop per 100ms tick (since interval is 67ms).
+        let tick = timer.tick(state, 100.0);
         assert!(tick.inputs.contains(&Input::SoftDrop));
     }
 
-    #[test]
-    fn releasing_soft_drop_resets_timer() {
+    #[rstest]
+    fn releasing_soft_drop_resets_accumulator() {
         let mut timer = Timer::new();
         let held = InputState {
             soft_drop_held: true,
             ..no_input()
         };
-        let _ = timer.tick(held, FRAME_MS); // initialize last_soft_drop_at
-        // Re-pressing immediately: last_soft_drop_at is still fresh,
-        // so soft drop won't fire again.
+        let _ = timer.tick(held, 100.0); // accumulate + fire
+        // Released: accumulator should reset to 0 so re-press doesn't
+        // immediately double-fire.
+        let _ = timer.tick(no_input(), FRAME_MS);
+        // Re-pressed: no drops accumulate at frame 1 since accumulator is 0.
         let tick = timer.tick(held, FRAME_MS);
         assert!(!tick.inputs.contains(&Input::SoftDrop));
     }
 
-    // -------- soft drop accelerating gravity --------
-
-    #[test]
-    fn gravity_fires_independently_of_soft_drop() {
-        // Gravity uses its own `GRAVITY_MS` cadence — it does NOT speed up
-        // when soft drop is held. Soft drop is additive (fires its own
-        // `Input::SoftDrop` shifts), not a replacement for gravity.
-        // After 1050ms with soft_drop held, gravity should fire (uses 1000ms).
+    #[rstest]
+    fn soft_drop_emits_one_per_sdf_interval() {
+        // SDF=15 → interval ≈67ms. With a 200ms frame delta, we should
+        // emit ~3 soft drops (200 / 67 ≈ 2.99).
         let mut timer = Timer::new();
-        std::thread::sleep(std::time::Duration::from_millis(1050));
         let state = InputState {
             soft_drop_held: true,
             ..no_input()
         };
-        let tick = timer.tick(state, FRAME_MS);
-        assert!(tick.fire_gravity);
+        let tick = timer.tick(state, 200.0);
+        let drop_count = tick
+            .inputs
+            .iter()
+            .filter(|i| **i == Input::SoftDrop)
+            .count();
+        assert!(
+            (2..=3).contains(&drop_count),
+            "expected 2-3 drops, got {drop_count}"
+        );
     }
 }

@@ -14,5 +14,8 @@ macroquad = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 
+[dev-dependencies]
+rstest = { workspace = true }
+
 [lints]
 workspace = true

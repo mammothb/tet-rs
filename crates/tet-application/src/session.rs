@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
 
 use crate::tick;
@@ -28,8 +30,10 @@ impl<R: Rng> GameSession<R> {
         self.players.len() - 1
     }
 
-    /// Advance the entire game by one frame.
-    pub fn step_frame(&mut self) {
+    /// Advance the entire game by one frame. `now` is passed to each
+    /// `Player::step_player` so per-player gravity clocks advance on the
+    /// caller's wall-clock time.
+    pub fn step_frame(&mut self, now: Instant) {
         self.frame += 1;
 
         let mut results = Vec::with_capacity(self.players.len());
@@ -51,10 +55,11 @@ impl<R: Rng> GameSession<R> {
                 }
             }
 
-            // 2. Tick this player (delegated to tick.rs).
-            let r = tick::step_player(player, &self.ruleset);
+            // 2. Tick this player. `Player::step_player` handles gravity
+            //    timing internally using its own `last_gravity_at` clock.
+            let r = player.step_player(&self.ruleset, now);
 
-            // 3. Tick.rs has already cleared lines and cancelled matching rows
+            // 3. The player has cleared lines and cancelled matching rows
             //    from `pending_garbage`. We just collect the result here.
             results.push(r);
         }
@@ -99,10 +104,6 @@ impl<R: Rng> GameSession<R> {
                 let result = tick::hard_drop(&mut self.players[idx]);
                 tick::post_lock(&mut self.players[idx], &result, &self.ruleset);
                 Some(result)
-            }
-            Input::StepGravity => {
-                tick::step_gravity(&mut self.players[idx]);
-                None
             }
         }
     }
@@ -218,6 +219,8 @@ pub fn apply_bot_move<R: Rng>(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use std::time::Instant;
 
     use rstest::rstest;
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
@@ -353,6 +356,7 @@ mod test {
             controller: Controller::Bot(Box::new(StubBot::empty())),
             pending_garbage: Vec::new(),
             attack_rng: StubRng::counter(),
+            last_gravity_at: Instant::now(),
         }
     }
 
@@ -384,9 +388,9 @@ mod test {
     fn step_frame_increments_frame_counter() {
         let mut session = t_session();
         assert_eq!(session.frame, 0);
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, 1);
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, 2);
     }
 
@@ -400,7 +404,7 @@ mod test {
             hole: 5,
             delay_remaining: 5,
         });
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.players[0].pending_garbage[0].delay_remaining, 4);
         assert_eq!(session.players[0].pending_garbage.len(), 1);
     }
@@ -413,7 +417,7 @@ mod test {
             hole: 0,
             delay_remaining: 1,
         });
-        session.step_frame();
+        session.step_frame(Instant::now());
         // Pending drained
         assert!(session.players[0].pending_garbage.is_empty());
         // Board has garbage with hole at col 0
@@ -427,7 +431,7 @@ mod test {
         // T-piece bbox at pos.y = -1 places cells at world y=0,0,0,1.
         // Stepping down would put them at y=-1 (OOB).
         session.players[0].current.pos = v2![3, -1];
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.players[0].lock_delay, 1);
     }
 
@@ -436,7 +440,7 @@ mod test {
         let mut session = t_session();
         session.players[0].phase = Phase::GameOver;
         let initial_frame = session.frame;
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, initial_frame + 1);
         // Player's lock_delay was 0; stays 0 (skipped)
         assert_eq!(session.players[0].lock_delay, 0);

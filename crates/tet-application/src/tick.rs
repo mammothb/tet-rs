@@ -1,6 +1,6 @@
 use tet_domain::{Cell, MinoType, Orientation, Rng, Rotation, Ruleset, Vec2, v2};
 
-use crate::{LOCK_DELAY_FRAMES, Phase, Piece, Player};
+use crate::{Phase, Piece, Player};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum TSpinStatus {
@@ -15,37 +15,6 @@ pub struct TickResult {
     pub lines_cleared: u8,
     pub tspin: TSpinStatus,
     pub piece_locked: bool,
-}
-
-/// One frame of per-player state updates: increment `lock_delay` if the piece
-/// can't fall, lock and respawn when the delay expires.
-///
-/// **Does not apply gravity.** Gravity is the composition root's responsibility
-/// (driven by its `Timer`); it routes gravity shifts through
-/// `apply_input(StepGravity)` which calls `step_gravity`. This function only
-/// handles the lock-delay timer.
-pub fn step_player<R: Rng>(player: &mut Player<R>, ruleset: &Ruleset) -> TickResult {
-    let mut result = TickResult {
-        lines_cleared: 0,
-        tspin: TSpinStatus::None,
-        piece_locked: false,
-    };
-
-    if player.phase != Phase::Playing {
-        return result;
-    }
-
-    if piece_can_fall(player) {
-        player.lock_delay = 0;
-    } else {
-        player.lock_delay += 1;
-        if player.lock_delay >= LOCK_DELAY_FRAMES {
-            result = try_lock(player);
-            post_lock(player, &result, ruleset);
-        }
-    }
-
-    result
 }
 
 /// True if shifting the active piece down by 1 cell wouldn't collide with the
@@ -299,6 +268,8 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
 mod test {
     use super::*;
 
+    use std::time::Instant;
+
     use rstest::rstest;
 
     use tet_domain::{Board, Queue};
@@ -335,7 +306,8 @@ mod test {
     /// Player with a T-piece at spawn position on an empty 10×25 board.
     /// Queue is filled from the deterministic RNG. The T-piece is hardcoded
     /// here (not from the queue) because tests that use this fixture want
-    /// a guaranteed T-piece setup.
+    /// a guaranteed T-piece setup. `last_gravity_at` is set to "now" so
+    /// gravity doesn't fire on the first `step_player` call.
     fn t_player() -> Player<StubRng> {
         Player {
             board: Board::new(10, 25),
@@ -352,6 +324,7 @@ mod test {
             controller: Controller::Bot(Box::new(NoopBot)),
             pending_garbage: Vec::new(),
             attack_rng: StubRng::counter(),
+            last_gravity_at: Instant::now(),
         }
     }
 

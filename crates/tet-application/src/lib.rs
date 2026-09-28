@@ -20,5 +20,5 @@ pub use session::GameSession;
 pub use snapshot::PlayerSnapshot;
 pub use tick::{
     TSpinStatus, TickResult, apply_horizontal_input, apply_rotation_input, hard_drop, soft_drop,
-    step_player, try_hold,
+    try_hold,
 };
