@@ -12,6 +12,12 @@
 //! every line up front. The renderer just iterates the plan and calls
 //! `draw_rectangle` with `width=1` or `height=1` for lines — no subpixel
 //! math, no half-pixel offsets, no anti-aliasing of edges.
+//!
+//! ## Fonts
+//!
+//! Fonts are loaded once at startup via [`Fonts`]
+//! (embedded via `include_bytes!`). HUD text uses Regular; prominent
+//! labels (`HOLD`, `NEXT`, player names) use `SemiBold`.
 
 // All integer/float casts in this file are bounded by domain invariants
 // (board dims ≤ 128, dpi ≤ 4, cell sizes ≤ 128 logical) — well within
@@ -28,7 +34,8 @@ use macroquad::prelude::*;
 use tet_application::{Frame, GridStyle, PlayerView, Renderer};
 use tet_domain::{Cell, MinoType, Orientation, Ruleset};
 
-use super::layout::{PixelRect, plan_board, plan_box};
+use crate::rendering::font::Fonts;
+use crate::rendering::layout::{PixelRect, plan_board, plan_box};
 
 /// Color for locked garbage cells and the board outline. Bright enough
 /// to be clearly visible on the black background.
@@ -76,6 +83,24 @@ fn draw_v_line(x_phys: i32, y_phys: i32, height_phys: i32, color: Color) {
     draw_rectangle(x_phys as f32, y_phys as f32, 1.0, height_phys as f32, color);
 }
 
+/// Draw text at the given logical position with the given font. Wraps
+/// `draw_text_ex` so the call sites don't need to construct `TextParams`.
+fn draw_label(text: &str, x: f32, y: f32, font_size: u16, font: &Font, color: Color) {
+    draw_text_ex(
+        text,
+        x,
+        y,
+        TextParams {
+            font: Some(font),
+            font_size,
+            font_scale: 1.0,
+            font_scale_aspect: 1.0,
+            color,
+            rotation: 0.0,
+        },
+    );
+}
+
 /// Draw a 4-edge outline of a `PixelRect`. Each edge is a 1-pixel-thick
 /// filled rectangle at integer physical-pixel positions.
 fn draw_outline(rect: PixelRect, color: Color) {
@@ -87,13 +112,22 @@ fn draw_outline(rect: PixelRect, color: Color) {
 
 pub struct MacroquadRenderer {
     dpi_scale: f32,
+    fonts: Fonts,
 }
 
 impl MacroquadRenderer {
+    /// Load fonts from the embedded bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the embedded TTF bytes are malformed. The shipped bytes
+    /// are well-formed so this should not happen in practice.
     #[must_use]
     pub fn new() -> Self {
+        let fonts = Fonts::load().expect("Fira Code fonts are embedded in the binary");
         Self {
             dpi_scale: screen_dpi_scale(),
+            fonts,
         }
     }
 }
@@ -108,25 +142,25 @@ impl Renderer for MacroquadRenderer {
     fn render(&mut self, frame: &Frame) {
         clear_background(BLACK);
         for view in &frame.views {
-            render_view(view, &frame.ruleset, self.dpi_scale);
+            render_view(view, &frame.ruleset, self.dpi_scale, &self.fonts);
         }
     }
 }
 
-fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
+fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
     render_board(view, ruleset, dpi);
     render_active_piece(view, ruleset, dpi);
     if let Some(ghost) = view.ghost {
         render_ghost(view, ruleset, ghost, dpi);
     }
     if view.layout.show_hold {
-        render_hold(view, dpi);
+        render_hold(view, dpi, fonts);
     }
     if view.layout.show_queue {
-        render_queue(view, ruleset, dpi);
+        render_queue(view, ruleset, dpi, fonts);
     }
-    render_stats(view, ruleset, dpi);
-    render_label(view, ruleset, dpi);
+    render_stats(view, ruleset, dpi, fonts);
+    render_label(view, ruleset, dpi, fonts);
 }
 
 fn render_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
@@ -324,14 +358,21 @@ fn render_ghost(view: &PlayerView, ruleset: &Ruleset, ghost: tet_domain::Vec2, d
     }
 }
 
-fn render_hold(view: &PlayerView, dpi: f32) {
+fn render_hold(view: &PlayerView, dpi: f32, fonts: &Fonts) {
     let layout = &view.layout;
     let box_size_phys = ((layout.cell_px * dpi).round() as i32) * HOLD_BOX_CELLS;
     let hold_x = layout.origin.0 - (box_size_phys + 4) as f32;
     let hold_y = layout.origin.1;
     let plan = plan_box((hold_x, hold_y), box_size_phys, dpi);
     draw_outline(plan.rect, STRUCTURE_COLOR);
-    draw_text("HOLD", hold_x, hold_y - 4.0, HUD_FONT_SIZE, TEXT_COLOR);
+    draw_label(
+        "HOLD",
+        hold_x,
+        hold_y - 4.0,
+        HUD_FONT_SIZE as u16,
+        &fonts.semibold,
+        TEXT_COLOR,
+    );
 
     let Some(kind) = view.snapshot.hold else {
         return;
@@ -353,7 +394,7 @@ fn render_hold(view: &PlayerView, dpi: f32) {
     }
 }
 
-fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
+fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
     let layout = &view.layout;
     let cell_phys = (QUEUE_PREVIEW_CELL_PX * dpi).round() as i32;
     let box_phys = cell_phys * HOLD_BOX_CELLS;
@@ -363,11 +404,12 @@ fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
     let qx = bx + bw + (QUEUE_PREVIEW_SPACING * dpi).round() as i32;
     let qy = by;
 
-    draw_text(
+    draw_label(
         "NEXT",
         layout.origin.0 + layout.cell_px * ruleset.num_cols as f32,
         layout.origin.1 - 4.0,
-        HUD_FONT_SIZE,
+        HUD_FONT_SIZE as u16,
+        &fonts.semibold,
         TEXT_COLOR,
     );
 
@@ -394,21 +436,28 @@ fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
     }
 }
 
-fn render_stats(view: &PlayerView, ruleset: &Ruleset, _dpi: f32) {
+fn render_stats(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) {
     let layout = &view.layout;
     let (ox, oy) = (layout.origin.0, layout.origin.1);
     let stats_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 + HUD_FONT_SIZE + 4.0;
     let mut line: i32 = 0;
     let mut text = |s: &str| {
         let y_offset = (line) as f32 * HUD_FONT_SIZE;
-        draw_text(s, ox, stats_y + y_offset, HUD_FONT_SIZE, TEXT_COLOR);
+        draw_label(
+            s,
+            ox,
+            stats_y + y_offset,
+            HUD_FONT_SIZE as u16,
+            &fonts.regular,
+            TEXT_COLOR,
+        );
         line += 1;
     };
     text(&format!("combo: {}", view.snapshot.combo));
     text(&format!("b2b: {}", view.snapshot.b2b));
 }
 
-fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32) {
+fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) {
     if view.label.is_empty() {
         return;
     }
@@ -416,7 +465,14 @@ fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32) {
     let (ox, oy) = (layout.origin.0, layout.origin.1);
     let queue_x = ox + layout.cell_px * ruleset.num_cols as f32 + QUEUE_PREVIEW_SPACING;
     let label_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 - 4.0;
-    draw_text(view.label, queue_x, label_y, HUD_FONT_SIZE, TEXT_COLOR);
+    draw_label(
+        view.label,
+        queue_x,
+        label_y,
+        HUD_FONT_SIZE as u16,
+        &fonts.semibold,
+        TEXT_COLOR,
+    );
 }
 
 /// Cell positions inside an N×N box, top-left origin (matches macroquad
