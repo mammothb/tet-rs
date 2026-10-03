@@ -457,3 +457,111 @@ fn piece_color(t: MinoType) -> Color {
         MinoType::L => Color::new(0.95, 0.55, 0.0, 1.0), // orange
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod test {
+    use super::*;
+    use rstest::rstest;
+
+    // ---- screen_y_offset_cells ----
+    //
+    // Maps domain Y (0 = bottom, growing up) to a y-offset in cells from
+    // the TOP of the region. Inverted so a piece's bottom (domain_y=0)
+    // appears at the BOTTOM of the rendered box.
+
+    #[rstest]
+    #[case(0_i8, 4_i8, 3.0)] // bottom of domain → bottom of screen (offset 3 in a 4-cell region)
+    #[case(1_i8, 4_i8, 2.0)]
+    #[case(2_i8, 4_i8, 1.0)]
+    #[case(3_i8, 4_i8, 0.0)] // top of domain → top of screen
+    fn screen_offset_inverts_domain_y_for_4_cell_region(
+        #[case] domain_y: i8,
+        #[case] region_cells: i8,
+        #[case] expected_offset: f32,
+    ) {
+        assert_eq!(
+            screen_y_offset_cells(domain_y, region_cells),
+            expected_offset
+        );
+    }
+
+    #[rstest]
+    #[case(0_i8, 20_i8, 19.0)] // 20 visible rows: bottom = offset 19
+    #[case(19_i8, 20_i8, 0.0)] // top row of visible = offset 0
+    fn screen_offset_scales_with_region_height(
+        #[case] domain_y: i8,
+        #[case] region_cells: i8,
+        #[case] expected_offset: f32,
+    ) {
+        assert_eq!(
+            screen_y_offset_cells(domain_y, region_cells),
+            expected_offset
+        );
+    }
+
+    // ---- piece_box_cells ----
+    //
+    // Maps each piece's 4 cells (in domain space, bottom-up) into screen
+    // box coordinates (top-down). Y is inverted so the piece's TOP tip
+    // appears at the TOP of the rendered box.
+    //
+    // Domain coords for North orientation (from `MinoType::coords`):
+    //   T: [(0,1), (1,1), (2,1), (1,2)]   — base at y=1, tip at y=2
+    //   I: [(0,2), (1,2), (2,2), (3,2)]   — flat at y=2
+    //   O: [(1,1), (2,1), (1,2), (2,2)]   — square
+    //   L: [(0,1), (1,1), (2,1), (2,2)]
+    //   J: [(0,1), (1,1), (2,1), (0,2)] — base at y=1, bump at y=2 x=0
+    //   S: [(1,1), (2,1), (0,2), (1,2)]
+    //   Z: [(0,1), (1,1), (1,2), (2,2)]
+    //
+    // With BOX_HEIGHT = 4, screen_y_offset_cells(y, 4) = 3 - y. So:
+    //   domain y=0 → screen y=3 (bottom of box)
+    //   domain y=1 → screen y=2
+    //   domain y=2 → screen y=1 (near top)
+    //   domain y=3 → screen y=0 (top of box)
+
+    #[rstest]
+    #[case(MinoType::T, 1)] // (0,2): tip at y=2 in domain → y=1 in box (near top)
+    #[case(MinoType::T, 2)] // base cells (0,1), (1,1), (2,1) all → y=2
+    #[case(MinoType::I, 1)] // (1,2) — vertical middle of box
+    #[case(MinoType::L, 1)] // (2,2) — corner piece's tall end
+    #[case(MinoType::J, 1)] // (1,1) — J base cell → y=2
+    fn piece_box_y_is_domain_y_inverted(#[case] kind: MinoType, #[case] cell_idx: usize) {
+        let cells = piece_box_cells(kind, 4);
+        let coords = kind.coords(Orientation::North);
+        let expected_screen_y = 3_i32 - (coords[cell_idx].y as i32);
+        assert_eq!(cells[cell_idx].1, expected_screen_y);
+    }
+
+    #[rstest]
+    #[case(MinoType::T, 3, 1, 1)] // (1,2) → (1, 1): tip at top of box
+    #[case(MinoType::I, 0, 0, 1)] // (0,2) → (0, 1): leftmost I cell
+    #[case(MinoType::O, 0, 1, 2)] // (1,1) → (1, 2): O is a 2x2 square
+    #[case(MinoType::O, 3, 2, 1)] // (2,2) → (2, 1): top-right of O
+    #[case(MinoType::J, 3, 0, 1)] // (0,2) → (0, 1): J's top bump at the very top-left
+    fn piece_box_specific_cells(
+        #[case] kind: MinoType,
+        #[case] cell_idx: usize,
+        #[case] expected_x: i32,
+        #[case] expected_y: i32,
+    ) {
+        let cells = piece_box_cells(kind, 4);
+        assert_eq!(cells[cell_idx], (expected_x, expected_y));
+    }
+
+    #[rstest]
+    fn piece_box_returns_exactly_4_cells() {
+        for kind in [
+            MinoType::T,
+            MinoType::I,
+            MinoType::O,
+            MinoType::S,
+            MinoType::Z,
+            MinoType::J,
+            MinoType::L,
+        ] {
+            assert_eq!(piece_box_cells(kind, 4).len(), 4);
+        }
+    }
+}
