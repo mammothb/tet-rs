@@ -65,22 +65,24 @@ fn render_board(view: &PlayerView, ruleset: &Ruleset) {
     let (x0, y0) = layout.origin;
     let cell_px = layout.cell_px;
     let cols = ruleset.num_cols;
-    let rows = ruleset.num_rows;
+    // Render only the visible rows (buffer area above is hidden).
+    let visible_rows = ruleset.num_visible_rows;
     let board_w = layout.board_w(cols);
-    let board_h = layout.board_h(rows);
+    let board_h = layout.board_h(visible_rows);
 
     // Outline.
     draw_rectangle_lines(x0, y0, board_w, board_h, 1.0, STRUCTURE_COLOR);
 
     // Locked cells. `Board::rows()` yields bottom-to-top; macroquad y is
-    // top-to-bottom. Flip via `screen_y_offset_cells`.
-    for (y, row) in view.snapshot.board.rows().enumerate() {
+    // top-to-bottom. Flip via `screen_y_offset_cells`. Skip buffer rows
+    // (y >= visible_rows) — they're above the visible playfield.
+    for (y, row) in view.snapshot.board.rows().enumerate().take(visible_rows) {
         for (x, cell) in row.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let screen_x = x0 + x as f32 * cell_px;
             // Board dimensions are bounded (< 128), so the usize → i8 cast is safe.
             #[allow(clippy::cast_possible_truncation)]
-            let y_offset = screen_y_offset_cells(y as i8, rows as i8);
+            let y_offset = screen_y_offset_cells(y as i8, visible_rows as i8);
             let screen_y = y0 + y_offset * cell_px;
 
             match cell {
@@ -116,9 +118,10 @@ fn render_active_piece(view: &PlayerView, ruleset: &Ruleset) {
     for cell_pos in view.snapshot.current.cells() {
         #[allow(clippy::cast_precision_loss)]
         let screen_x = x0 + f32::from(cell_pos.x) * cell_px;
-        // Board dimensions bounded; safe to truncate.
+        // Board dimensions bounded; safe to truncate. Use visible_rows so
+        // pieces in the buffer area (y >= visible_rows) render off-screen.
         #[allow(clippy::cast_possible_truncation)]
-        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_rows as i8);
+        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_visible_rows as i8);
         let screen_y = y0 + y_offset * cell_px;
         draw_rectangle(screen_x, screen_y, cell_px, cell_px, color);
     }
@@ -138,9 +141,10 @@ fn render_ghost(view: &PlayerView, ruleset: &Ruleset, ghost: tet_domain::Vec2) {
             ghost.y + (cell_offset.y - view.snapshot.current.pos.y),
         );
         let screen_x = x0 + f32::from(cell_pos.x) * cell_px;
-        // Board dimensions bounded; safe to truncate.
+        // Board dimensions bounded; safe to truncate. Use visible_rows so
+        // ghost pieces above the visible area render off-screen.
         #[allow(clippy::cast_possible_truncation)]
-        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_rows as i8);
+        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_visible_rows as i8);
         let screen_y = y0 + y_offset * cell_px;
         draw_rectangle(screen_x, screen_y, cell_px, cell_px, GHOST_COLOR);
         // Trace the piece color on the edges so the ghost is recognizable.
@@ -200,7 +204,7 @@ fn render_queue(view: &PlayerView, ruleset: &tet_domain::Ruleset) {
 fn render_stats(view: &PlayerView, ruleset: &Ruleset) {
     let layout = &view.layout;
     let (x0, y0) = layout.origin;
-    let stats_y = y0 + layout.board_h(ruleset.num_rows) + HUD_FONT_SIZE + 4.0;
+    let stats_y = y0 + layout.board_h(ruleset.num_visible_rows) + HUD_FONT_SIZE + 4.0;
     let mut line: i32 = 0;
     let mut text = |s: &str| {
         #[allow(clippy::cast_precision_loss)]
@@ -219,13 +223,14 @@ fn render_label(view: &PlayerView, ruleset: &Ruleset) {
     let layout = &view.layout;
     let (x0, y0) = layout.origin;
     let queue_x = x0 + layout.board_w(ruleset.num_cols) + QUEUE_PREVIEW_SPACING;
-    let label_y = y0 + layout.board_h(ruleset.num_rows) - 4.0;
+    let label_y = y0 + layout.board_h(ruleset.num_visible_rows) - 4.0;
     draw_text(view.label, queue_x, label_y, HUD_FONT_SIZE, TEXT_COLOR);
 }
 
 fn cell_px_for_box(board_cell_px: f32) -> f32 {
-    // Hold box uses 60% of board cell size so pieces look proportional.
-    board_cell_px * 0.6
+    // Hold box uses the same cell size as the board. Pieces are drawn at
+    // full scale inside the box.
+    board_cell_px
 }
 
 /// Cell positions inside a 4×4 preview/hold box, top-left origin (matches
