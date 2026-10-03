@@ -64,6 +64,15 @@ const HUD_FONT_SIZE: f32 = 18.0;
 const HOLD_BOX_CELLS: i32 = 4;
 const QUEUE_PREVIEW_CELL_PX: f32 = 16.0;
 const QUEUE_PREVIEW_SPACING: f32 = 4.0;
+/// Vertical offset from the nearest edge for labels (HOLD, NEXT, stats,
+/// player name). The text baseline sits at this offset above the edge,
+/// so the text ascends into the available space above.
+///
+/// **Must stay small** — the cap height at font size 18 extends ~14px
+/// above the baseline. The window title bar clips the top of the canvas;
+/// at `LABEL_PADDING = 8` the cap height went above the title bar and
+/// got cut off. `0.0` keeps it below.
+const LABEL_PADDING: f32 = 0.0;
 
 /// Convert a domain Y coordinate (0 = bottom, growing up) to a y-offset,
 /// in cells, from the TOP of a region of the given height.
@@ -368,7 +377,7 @@ fn render_hold(view: &PlayerView, dpi: f32, fonts: &Fonts) {
     draw_label(
         "HOLD",
         hold_x,
-        hold_y - 4.0,
+        hold_y - LABEL_PADDING,
         HUD_FONT_SIZE as u16,
         &fonts.semibold,
         TEXT_COLOR,
@@ -407,7 +416,7 @@ fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
     draw_label(
         "NEXT",
         layout.origin.0 + layout.cell_px * ruleset.num_cols as f32,
-        layout.origin.1 - 4.0,
+        layout.origin.1 - LABEL_PADDING,
         HUD_FONT_SIZE as u16,
         &fonts.semibold,
         TEXT_COLOR,
@@ -439,7 +448,8 @@ fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
 fn render_stats(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) {
     let layout = &view.layout;
     let (ox, oy) = (layout.origin.0, layout.origin.1);
-    let stats_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 + HUD_FONT_SIZE + 4.0;
+    let stats_y =
+        oy + layout.cell_px * ruleset.num_visible_rows as f32 + HUD_FONT_SIZE + LABEL_PADDING;
     let mut line: i32 = 0;
     let mut text = |s: &str| {
         let y_offset = (line) as f32 * HUD_FONT_SIZE;
@@ -464,7 +474,7 @@ fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) 
     let layout = &view.layout;
     let (ox, oy) = (layout.origin.0, layout.origin.1);
     let queue_x = ox + layout.cell_px * ruleset.num_cols as f32 + QUEUE_PREVIEW_SPACING;
-    let label_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 - 4.0;
+    let label_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 - LABEL_PADDING;
     draw_label(
         view.label,
         queue_x,
