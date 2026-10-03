@@ -15,7 +15,7 @@ pub use player::{PendingGarbage, Phase, Player};
 pub use ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
 pub use ports::clock::Clock;
 pub use ports::input::{Input, InputSource};
-pub use ports::renderer::{Frame, Layout, PlayerView, Renderer};
+pub use ports::renderer::{Frame, GridStyle, Layout, PlayerView, Renderer};
 pub use session::GameSession;
 pub use snapshot::PlayerSnapshot;
 pub use tick::{

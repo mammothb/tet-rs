@@ -1,27 +1,151 @@
-use tet_domain::Ruleset;
+use tet_domain::{Ruleset, Vec2};
 
 use crate::PlayerSnapshot;
 
-pub struct Frame<'a> {
-    pub ruleset: &'a Ruleset,
-    pub views: Vec<PlayerView<'a>>,
+/// One rendered frame. The renderer interprets each view at its layout,
+/// using the ruleset for board dimensions and preview count.
+pub struct Frame {
+    pub ruleset: Ruleset,
+    pub views: Vec<PlayerView>,
 }
 
-pub struct PlayerView<'a> {
-    pub snapshot: &'a PlayerSnapshot,
-    pub label: &'a str,
-    /// Where on screen this board sits. Renderer interprets.
+pub struct PlayerView {
+    pub snapshot: PlayerSnapshot,
+    pub label: &'static str,
+    /// Where to render this view on screen.
     pub layout: Layout,
+    /// Projected landing position for the current piece (rendered with
+    /// reduced opacity). Computed by `tick::project_ghost(&player)`.
+    pub ghost: Option<Vec2>,
 }
 
+/// Which lines to draw on the empty board area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GridStyle {
+    /// No grid lines — only the board outline.
+    None,
+    /// Horizontal lines only, one per visible row.
+    Horizontal,
+    /// Vertical lines only, one per column.
+    Vertical,
+    /// Both horizontal and vertical lines. Default grid style.
+    Full,
+}
+
+/// Where to draw a board and what to show. Coordinates are in screen pixels,
+/// top-left origin, y-down (matches the renderer's coordinate space). The
+/// composition root (tet-app) builds a `Layout` per board.
+///
+/// Board dimensions (cols × rows) come from the `Frame`'s `Ruleset`, not
+/// from this struct — keeping the layout focused on pixel-level config.
+#[derive(Clone, Copy)]
 pub struct Layout {
-    pub origin: (i32, i32), // top-left in screen pixels
-    pub cell_px: i32,       // cell size in pixels
+    /// Top-left of the board in screen pixels.
+    pub origin: (f32, f32),
+    /// Cell size in pixels.
+    pub cell_px: f32,
+    /// Render the upcoming pieces column.
     pub show_queue: bool,
+    /// Render the held piece.
     pub show_hold: bool,
-    pub show_stats: bool,
+    /// Render the board grid. Defaults to `Full` for thin horizontal
+    /// + vertical lines on the empty board area.
+    pub grid_style: GridStyle,
+}
+
+impl Layout {
+    /// Default pixel-level layout. Cell size 24px, all visual features enabled.
+    /// Combine with `..Layout::default()` for overrides.
+    #[must_use]
+    pub const fn default() -> Self {
+        Self {
+            origin: (0.0, 0.0),
+            cell_px: 24.0,
+            show_queue: true,
+            show_hold: true,
+            grid_style: GridStyle::Full,
+        }
+    }
+
+    /// Board width in pixels for `cols` columns.
+    #[must_use]
+    pub fn board_w(&self, cols: usize) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let cols = cols as f32;
+        self.cell_px * cols
+    }
+
+    /// Board height in pixels for `rows` rows.
+    #[must_use]
+    pub fn board_h(&self, rows: usize) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let rows = rows as f32;
+        self.cell_px * rows
+    }
+
+    /// Width occupied by the hold box on the LEFT of the board, including
+    /// the spacing gap. The composition root adds this to the board's
+    /// origin.x so the hold box fits on screen without overlapping the board.
+    #[must_use]
+    pub fn hold_box_width(&self) -> f32 {
+        // Hold box: cell_px per cell, 4 cells wide, plus 4px gap to the board.
+        self.cell_px * 4.0 + 4.0
+    }
 }
 
 pub trait Renderer {
-    fn render(&mut self, frame: &Frame<'_>);
+    fn render(&mut self, frame: &Frame);
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod test {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    fn default_layout_uses_24px_cells_and_all_features_enabled() {
+        let layout = Layout::default();
+        assert_eq!(layout.cell_px, 24.0);
+        assert_eq!(layout.origin, (0.0, 0.0));
+        assert!(layout.show_queue);
+        assert!(layout.show_hold);
+        assert_eq!(layout.grid_style, GridStyle::Full);
+    }
+
+    #[rstest]
+    fn board_w_and_h_use_cols_and_rows_from_ruleset() {
+        let layout = Layout::default();
+        let ruleset = Ruleset::guideline();
+        assert_eq!(layout.board_w(ruleset.num_cols), 240.0);
+        assert_eq!(layout.board_h(ruleset.num_rows), 600.0);
+    }
+
+    #[rstest]
+    fn layout_can_be_overridden_for_smaller_boards() {
+        let layout = Layout {
+            cell_px: 16.0,
+            grid_style: GridStyle::None,
+            ..Layout::default()
+        };
+        assert_eq!(layout.board_w(10), 160.0);
+        assert_eq!(layout.board_h(25), 400.0);
+        assert!(layout.show_queue); // unchanged
+        assert_eq!(layout.grid_style, GridStyle::None); // overridden
+    }
+
+    #[rstest]
+    fn hold_box_width_scales_with_cell_size() {
+        // Default 24px cells → 24 * 4 + 4 = 100px wide sidebar.
+        let layout = Layout::default();
+        assert_eq!(layout.hold_box_width(), 100.0);
+        // Smaller cells → proportionally smaller sidebar.
+        let layout_small = Layout {
+            cell_px: 16.0,
+            ..Layout::default()
+        };
+        assert_eq!(layout_small.hold_box_width(), 68.0);
+        // And the small case is smaller than the default case.
+        assert!(layout_small.hold_box_width() < layout.hold_box_width());
+    }
 }

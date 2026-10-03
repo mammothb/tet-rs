@@ -1,6 +1,6 @@
 use crate::{MinoType, Orientation, Rotation, Vec2, mino::Mino};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ruleset {
     pub num_cols: usize,
     pub num_rows: usize,
