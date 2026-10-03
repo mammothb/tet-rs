@@ -1,9 +1,11 @@
+use std::time::Instant;
+
 use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
 
 use crate::tick;
 use crate::{
-    ATTACK_FOR_LINES, BotMove, BotTransport, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase,
-    Piece, Player, PlayerSnapshot, TickResult,
+    ATTACK_FOR_LINES, BotMove, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase, Piece, Player,
+    PlayerSnapshot, TickResult,
 };
 
 pub struct GameSession<R: Rng> {
@@ -28,8 +30,10 @@ impl<R: Rng> GameSession<R> {
         self.players.len() - 1
     }
 
-    /// Advance the entire game by one frame.
-    pub fn step_frame(&mut self) {
+    /// Advance the entire game by one frame. `now` is passed to each
+    /// `Player::step_player` so per-player gravity clocks advance on the
+    /// caller's wall-clock time.
+    pub fn step_frame(&mut self, now: Instant) {
         self.frame += 1;
 
         let mut results = Vec::with_capacity(self.players.len());
@@ -51,41 +55,17 @@ impl<R: Rng> GameSession<R> {
                 }
             }
 
-            // 2. Tick this player (delegated to tick.rs).
-            let r = tick::step_player(player, &self.ruleset);
+            // 2. Tick this player. `Player::step_player` handles gravity
+            //    timing internally using its own `last_gravity_at` clock.
+            let r = player.step_player(&self.ruleset, now);
 
-            // 3. Tick.rs has already cleared lines and cancelled matching rows
+            // 3. The player has cleared lines and cancelled matching rows
             //    from `pending_garbage`. We just collect the result here.
             results.push(r);
         }
 
         // 4. Distribute new attacks from line clears to all opponents.
         self.distribute_garbage(&results);
-    }
-
-    /// Drive a bot: take snapshot, ask transport for moves, apply first
-    /// valid one. (For when the session is in control of the bot loop.)
-    /// Drive a bot: take snapshot, ask transport for moves, apply first
-    /// valid one. (For when the session is in control of the bot loop.)
-    ///
-    /// Async because `BotTransport::update` and `suggest` are async (do I/O).
-    /// See `tet-application/Cargo.toml` for the `tokio` runtime.
-    pub async fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
-        let snap = self.snapshot(idx);
-        let _ = bot.update(&snap).await;
-
-        let Ok(moves) = bot.suggest().await else {
-            return;
-        };
-
-        // Try each move in preference order; first valid one wins.
-        for mv in moves {
-            if apply_bot_move(&mut self.players[idx], mv, &self.ruleset).is_some() {
-                return;
-            }
-        }
-        // All suggested moves were invalid (board state changed under bot);
-        // next `suggest` will see updated state.
     }
 
     /// Apply a discrete human input to one player.
@@ -178,7 +158,11 @@ impl<R: Rng> GameSession<R> {
     }
 }
 
-fn apply_bot_move<R: Rng>(player: &mut Player<R>, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
+pub fn apply_bot_move<R: Rng>(
+    player: &mut Player<R>,
+    mv: BotMove,
+    ruleset: &Ruleset,
+) -> Option<Piece> {
     // 1. Convert TBP true-rotation-center → bbox-anchor position.
     //    `MinoType::tbp_center_for` is a static lookup in the domain.
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
@@ -236,12 +220,15 @@ fn apply_bot_move<R: Rng>(player: &mut Player<R>, mv: BotMove, ruleset: &Ruleset
 mod test {
     use super::*;
 
+    use std::time::Instant;
+
     use rstest::rstest;
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
 
     use crate::PendingGarbage;
     use crate::TSpinStatus;
     use crate::player::{Controller, Player};
+    use crate::ports::bot::BotTransport;
     use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
@@ -264,6 +251,37 @@ mod test {
             let v = self.values[self.idx % self.values.len()];
             self.idx += 1;
             v
+        }
+    }
+
+    impl<R: Rng> GameSession<R> {
+        /// Drive a bot synchronously: take snapshot, ask transport for moves,
+        /// apply first valid one. Test-only — doesn't exist in release builds.
+        ///
+        /// **Not for production use.** Production uses worker threads on a
+        /// side tokio runtime — see `PROPOSAL-domain-next-steps.md` §7.
+        ///
+        /// The orchestration logic (update → suggest → apply, with error
+        /// handling) is real and worth testing as a unit, but the method
+        /// itself only exists for tests and headless tools (CLI replay, fuzz
+        /// harnesses). If a headless tool needs this in production, we promote
+        /// it from `#[cfg(test)]` to a regular `pub` method at that point.
+        async fn step_bot(&mut self, idx: usize, bot: &mut dyn BotTransport) {
+            let snap = self.snapshot(idx);
+            let _ = bot.update(&snap).await;
+
+            let Ok(moves) = bot.suggest().await else {
+                return;
+            };
+
+            // Try each move in preference order; first valid one wins.
+            for mv in moves {
+                if apply_bot_move(&mut self.players[idx], mv, &self.ruleset).is_some() {
+                    return;
+                }
+            }
+            // All suggested moves were invalid (board state changed under bot);
+            // next `suggest` will see updated state.
         }
     }
 
@@ -333,11 +351,12 @@ mod test {
             lines: 0,
             combo: 0,
             b2b: false,
-            lock_delay: 0,
+            lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(StubBot::empty())),
             pending_garbage: Vec::new(),
             attack_rng: StubRng::counter(),
+            last_gravity_at: Instant::now(),
         }
     }
 
@@ -369,9 +388,9 @@ mod test {
     fn step_frame_increments_frame_counter() {
         let mut session = t_session();
         assert_eq!(session.frame, 0);
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, 1);
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, 2);
     }
 
@@ -385,7 +404,7 @@ mod test {
             hole: 5,
             delay_remaining: 5,
         });
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.players[0].pending_garbage[0].delay_remaining, 4);
         assert_eq!(session.players[0].pending_garbage.len(), 1);
     }
@@ -398,7 +417,7 @@ mod test {
             hole: 0,
             delay_remaining: 1,
         });
-        session.step_frame();
+        session.step_frame(Instant::now());
         // Pending drained
         assert!(session.players[0].pending_garbage.is_empty());
         // Board has garbage with hole at col 0
@@ -407,13 +426,34 @@ mod test {
     }
 
     #[rstest]
-    fn step_frame_advances_lock_delay_when_piece_cant_move_down() {
+    fn step_frame_starts_lock_timer_when_piece_cant_move_down() {
         let mut session = t_session();
         // T-piece bbox at pos.y = -1 places cells at world y=0,0,0,1.
         // Stepping down would put them at y=-1 (OOB).
         session.players[0].current.pos = v2![3, -1];
-        session.step_frame();
-        assert_eq!(session.players[0].lock_delay, 1);
+        // No time has elapsed, so the lock timer should be set to `now`
+        // (just grounded). It shouldn't fire yet (elapsed < LOCK_DELAY_MS).
+        let before = Instant::now();
+        session.step_frame(before);
+        assert!(session.players[0].lock_grounded_at.is_some());
+    }
+
+    #[rstest]
+    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
+    fn step_frame_locks_piece_after_lock_delay_elapses() {
+        let mut session = t_session();
+        // Place piece on the floor so it can't fall.
+        session.players[0].current.pos = v2![3, -1];
+        // Anchor the timer 550ms in the past so the lock delay has elapsed.
+        session.players[0].lock_grounded_at =
+            Some(Instant::now() - std::time::Duration::from_millis(550));
+        session.step_frame(Instant::now());
+        // After lock + spawn, the piece's lock timer is reset to None
+        // (next piece hasn't been grounded yet).
+        assert!(
+            session.players[0].lock_grounded_at.is_none(),
+            "lock_grounded_at should be None after lock + spawn"
+        );
     }
 
     #[rstest]
@@ -421,10 +461,10 @@ mod test {
         let mut session = t_session();
         session.players[0].phase = Phase::GameOver;
         let initial_frame = session.frame;
-        session.step_frame();
+        session.step_frame(Instant::now());
         assert_eq!(session.frame, initial_frame + 1);
-        // Player's lock_delay was 0; stays 0 (skipped)
-        assert_eq!(session.players[0].lock_delay, 0);
+        // Player's lock_grounded_at was None; stays None (skipped).
+        assert!(session.players[0].lock_grounded_at.is_none());
     }
 
     // -------- snapshot --------
