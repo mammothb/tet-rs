@@ -703,6 +703,7 @@ name = "tet-infrastructure"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "macroquad",
  "rand",
  "rstest",
  "serde",
