@@ -1,83 +1,18 @@
+mod bot_worker;
 mod timer;
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
 use macroquad::prelude::*;
 use tet_application::{
-    BotError, BotMove, BotTransport, Frame, GameSession, Layout, Player, PlayerSnapshot,
-    PlayerView, Renderer, session,
+    Frame, GameSession, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
 };
 use tet_domain::{Rng, Ruleset, Vec2};
-use tet_infrastructure::{BotSubprocess, MacroquadRenderer, SmallRng};
-use tokio::sync::{mpsc as tmpsc, oneshot};
+use tet_infrastructure::{MacroquadRenderer, SmallRng};
+use tokio::sync::oneshot;
 
+use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
 use timer::{InputState, Timer};
-
-#[derive(Clone)]
-struct BotHandle {
-    // Sending a request is non-blocking (channel is unbounded).
-    req_tx: tmpsc::UnboundedSender<BotRequest>,
-    // Receiving a response IS blocking — polled each frame.
-    resp_rx: Arc<Mutex<mpsc::Receiver<BotResponse>>>,
-}
-
-#[allow(dead_code)]
-enum BotRequest {
-    Update(PlayerSnapshot),
-    Suggest(oneshot::Sender<Result<Vec<BotMove>, BotError>>),
-    Stop,
-}
-
-#[allow(dead_code)]
-enum BotResponse {
-    Ack,
-    Error(BotError),
-}
-
-/// In-flight `Suggest` reply. The receiver stays in our pending list until
-/// the worker actually sends through it (or we drop the slot on cleanup).
-type PendingSuggest = (usize, oneshot::Receiver<Result<Vec<BotMove>, BotError>>);
-
-/// Spawn one worker task per bot. Hoisted to module level so the
-/// items-after-statements lint is happy (no items between let bindings).
-///
-/// `bot_path: PathBuf` (owned) because the spawned async task is `'static`
-/// — it must own all its captured data, no borrows from the caller.
-#[allow(dead_code)]
-fn spawn_bot_worker(runtime: &tokio::runtime::Handle, bot_path: PathBuf) -> BotHandle {
-    let (req_tx, mut req_rx) = tmpsc::unbounded_channel::<BotRequest>();
-    let (resp_tx, resp_rx) = mpsc::channel::<BotResponse>();
-    let resp_rx = Arc::new(Mutex::new(resp_rx));
-
-    runtime.spawn(async move {
-        let mut bot = BotSubprocess::spawn(&bot_path).await?;
-        while let Some(req) = req_rx.recv().await {
-            match req {
-                BotRequest::Update(snap) => match bot.update(&snap).await {
-                    Ok(()) => {
-                        let _ = resp_tx.send(BotResponse::Ack);
-                    }
-                    Err(e) => {
-                        let _ = resp_tx.send(BotResponse::Error(e));
-                    }
-                },
-                BotRequest::Suggest(reply) => {
-                    let moves = bot.suggest().await;
-                    let _ = reply.send(moves);
-                }
-                BotRequest::Stop => {
-                    bot.stop().await;
-                    return Ok::<_, BotError>(());
-                }
-            }
-        }
-        Ok(())
-    });
-
-    BotHandle { req_tx, resp_rx }
-}
 
 /// Read the keyboard state and produce an `InputState` for the timer.
 fn collect_input_state() -> InputState {
