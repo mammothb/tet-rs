@@ -19,6 +19,19 @@ pub struct PlayerView {
     pub ghost: Option<Vec2>,
 }
 
+/// Which lines to draw on the empty board area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GridStyle {
+    /// No grid lines — only the board outline.
+    None,
+    /// Horizontal lines only, one per visible row.
+    Horizontal,
+    /// Vertical lines only, one per column.
+    Vertical,
+    /// Both horizontal and vertical lines. Default grid style.
+    Full,
+}
+
 /// Where to draw a board and what to show. Coordinates are in screen pixels,
 /// top-left origin, y-down (matches the renderer's coordinate space). The
 /// composition root (tet-app) builds a `Layout` per board.
@@ -35,8 +48,9 @@ pub struct Layout {
     pub show_queue: bool,
     /// Render the held piece.
     pub show_hold: bool,
-    /// Render faint grid lines on empty cells.
-    pub show_grid: bool,
+    /// Render the board grid. Defaults to `Full` for thin horizontal
+    /// + vertical lines on the empty board area.
+    pub grid_style: GridStyle,
 }
 
 impl Layout {
@@ -49,7 +63,7 @@ impl Layout {
             cell_px: 24.0,
             show_queue: true,
             show_hold: true,
-            show_grid: true,
+            grid_style: GridStyle::Full,
         }
     }
 
@@ -87,18 +101,19 @@ pub trait Renderer {
 #[allow(clippy::float_cmp)]
 mod test {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
+    #[rstest]
     fn default_layout_uses_24px_cells_and_all_features_enabled() {
         let layout = Layout::default();
         assert_eq!(layout.cell_px, 24.0);
         assert_eq!(layout.origin, (0.0, 0.0));
         assert!(layout.show_queue);
         assert!(layout.show_hold);
-        assert!(layout.show_grid);
+        assert_eq!(layout.grid_style, GridStyle::Full);
     }
 
-    #[test]
+    #[rstest]
     fn board_w_and_h_use_cols_and_rows_from_ruleset() {
         let layout = Layout::default();
         let ruleset = Ruleset::guideline();
@@ -106,18 +121,20 @@ mod test {
         assert_eq!(layout.board_h(ruleset.num_rows), 600.0);
     }
 
-    #[test]
+    #[rstest]
     fn layout_can_be_overridden_for_smaller_boards() {
         let layout = Layout {
             cell_px: 16.0,
+            grid_style: GridStyle::None,
             ..Layout::default()
         };
         assert_eq!(layout.board_w(10), 160.0);
         assert_eq!(layout.board_h(25), 400.0);
         assert!(layout.show_queue); // unchanged
+        assert_eq!(layout.grid_style, GridStyle::None); // overridden
     }
 
-    #[test]
+    #[rstest]
     fn hold_box_width_scales_with_cell_size() {
         // Default 24px cells → 24 * 4 + 4 = 100px wide sidebar.
         let layout = Layout::default();

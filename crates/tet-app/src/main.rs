@@ -107,7 +107,16 @@ async fn main() {
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
     let mut timer = Timer::new();
     let mut last_frame_at = Instant::now();
-    let mut renderer = MacroquadRenderer;
+
+    // Init tracing so we can see what values the renderer is computing.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tet_render=trace")),
+        )
+        .with_target(true)
+        .init();
+    let mut renderer = MacroquadRenderer::new();
 
     loop {
         let frame_delta_ms = last_frame_at.elapsed().as_secs_f32() * 1000.0;

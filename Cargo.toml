@@ -21,7 +21,7 @@ tbp = { version = "3.0.0" }
 thiserror = { version = "2.0.21" }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync"] }
 tracing = { version = "0.1.44" }
-tracing-subscriber = { version = "0.3.23" }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # dev dependencies
 rstest = { version = "0.27.0" }
