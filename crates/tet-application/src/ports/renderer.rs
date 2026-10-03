@@ -68,6 +68,15 @@ impl Layout {
         let rows = rows as f32;
         self.cell_px * rows
     }
+
+    /// Width occupied by the hold box on the LEFT of the board, including
+    /// the spacing gap. The composition root adds this to the board's
+    /// origin.x so the hold box fits on screen without overlapping the board.
+    #[must_use]
+    pub fn hold_box_width(&self) -> f32 {
+        // Hold box: 0.6 * cell_px per cell, 4 cells wide, plus 4px gap to the board.
+        self.cell_px * 0.6 * 4.0 + 4.0
+    }
 }
 
 pub trait Renderer {
@@ -106,5 +115,29 @@ mod test {
         assert_eq!(layout.board_w(10), 160.0);
         assert_eq!(layout.board_h(25), 400.0);
         assert!(layout.show_queue); // unchanged
+    }
+
+    #[test]
+    fn hold_box_width_scales_with_cell_size() {
+        // Default 24px cells → 0.6 * 24 * 4 + 4 ≈ 61.6px wide sidebar.
+        // Exact comparison would fail due to f32 precision (0.6 isn't exact),
+        // so check within a small tolerance.
+        let layout = Layout::default();
+        let expected = 0.6 * 24.0 * 4.0 + 4.0;
+        assert!(
+            (layout.hold_box_width() - expected).abs() < 0.001,
+            "expected ≈ {}, got {}",
+            expected,
+            layout.hold_box_width()
+        );
+        // Smaller cells → proportionally smaller sidebar.
+        let layout_small = Layout {
+            cell_px: 16.0,
+            ..Layout::default()
+        };
+        let expected_small = 0.6 * 16.0 * 4.0 + 4.0;
+        assert!((layout_small.hold_box_width() - expected_small).abs() < 0.001);
+        // And the small case is smaller than the default case.
+        assert!(layout_small.hold_box_width() < layout.hold_box_width());
     }
 }

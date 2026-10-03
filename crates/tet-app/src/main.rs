@@ -100,7 +100,9 @@ fn collect_input_state() -> InputState {
 fn assemble_frame<R: Rng>(session: &GameSession<R>, human_idx: usize) -> Frame {
     let mut views = Vec::with_capacity(session.players.len());
     let base_layout = Layout::default();
-    let (ox, oy) = (16.0, 16.0);
+    // Origin starts AFTER the hold box on the left, so the hold box fits
+    // on screen without overlapping the board.
+    let (ox, oy) = (16.0 + base_layout.hold_box_width(), 16.0);
     #[allow(clippy::cast_precision_loss)]
     let x_spacing = base_layout.board_w(session.ruleset.num_cols) + 80.0;
 
