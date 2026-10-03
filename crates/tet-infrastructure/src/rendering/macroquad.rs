@@ -2,7 +2,7 @@
 //!
 //! Drawing happens in screen-pixel coordinates with `y` down (macroquad's
 //! convention). The domain is `y` up. The renderer flips `y` once per cell
-//! so the application layer never touches the flip.
+//! via [`screen_y_offset_cells`] so the application layer never touches the flip.
 
 use macroquad::prelude::*;
 use tet_application::{Frame, PlayerView, Renderer};
@@ -22,6 +22,16 @@ const HUD_FONT_SIZE: f32 = 18.0;
 const HOLD_BOX_CELLS: f32 = 4.0;
 const QUEUE_PREVIEW_CELL_PX: f32 = 16.0;
 const QUEUE_PREVIEW_SPACING: f32 = 4.0;
+
+/// Convert a domain Y coordinate (0 = bottom, growing up) to a y-offset,
+/// in cells, from the TOP of a region of the given height.
+///
+/// `region_height_cells` is the total cell-count of the region being drawn
+/// (e.g. `ruleset.num_rows` for the board, 4 for a 4×4 preview box).
+/// Returns 0 for the topmost domain row, growing downward.
+fn screen_y_offset_cells(domain_y: i8, region_height_cells: i8) -> f32 {
+    f32::from(region_height_cells - 1 - domain_y)
+}
 
 pub struct MacroquadRenderer;
 
@@ -63,13 +73,15 @@ fn render_board(view: &PlayerView, ruleset: &Ruleset) {
     draw_rectangle_lines(x0, y0, board_w, board_h, 1.0, STRUCTURE_COLOR);
 
     // Locked cells. `Board::rows()` yields bottom-to-top; macroquad y is
-    // top-to-bottom. Flip once here, never elsewhere.
+    // top-to-bottom. Flip via `screen_y_offset_cells`.
     for (y, row) in view.snapshot.board.rows().enumerate() {
         for (x, cell) in row.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let screen_x = x0 + x as f32 * cell_px;
-            #[allow(clippy::cast_precision_loss)]
-            let screen_y = y0 + (board_h - (y as f32 + 1.0)) * cell_px;
+            // Board dimensions are bounded (< 128), so the usize → i8 cast is safe.
+            #[allow(clippy::cast_possible_truncation)]
+            let y_offset = screen_y_offset_cells(y as i8, rows as i8);
+            let screen_y = y0 + y_offset * cell_px;
 
             match cell {
                 Cell::Empty => {
@@ -99,14 +111,15 @@ fn render_active_piece(view: &PlayerView, ruleset: &Ruleset) {
     let layout = &view.layout;
     let (x0, y0) = layout.origin;
     let cell_px = layout.cell_px;
-    let board_h = layout.board_h(ruleset.num_rows);
     let color = piece_color(view.snapshot.current.kind);
 
     for cell_pos in view.snapshot.current.cells() {
         #[allow(clippy::cast_precision_loss)]
         let screen_x = x0 + f32::from(cell_pos.x) * cell_px;
-        #[allow(clippy::cast_precision_loss)]
-        let screen_y = y0 + (board_h - f32::from(cell_pos.y + 1)) * cell_px;
+        // Board dimensions bounded; safe to truncate.
+        #[allow(clippy::cast_possible_truncation)]
+        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_rows as i8);
+        let screen_y = y0 + y_offset * cell_px;
         draw_rectangle(screen_x, screen_y, cell_px, cell_px, color);
     }
 }
@@ -115,7 +128,6 @@ fn render_ghost(view: &PlayerView, ruleset: &Ruleset, ghost: tet_domain::Vec2) {
     let layout = &view.layout;
     let (x0, y0) = layout.origin;
     let cell_px = layout.cell_px;
-    let board_h = layout.board_h(ruleset.num_rows);
     let color = piece_color(view.snapshot.current.kind);
 
     for cell_offset in view.snapshot.current.cells() {
@@ -126,7 +138,10 @@ fn render_ghost(view: &PlayerView, ruleset: &Ruleset, ghost: tet_domain::Vec2) {
             ghost.y + (cell_offset.y - view.snapshot.current.pos.y),
         );
         let screen_x = x0 + f32::from(cell_pos.x) * cell_px;
-        let screen_y = y0 + (board_h - f32::from(cell_pos.y + 1)) * cell_px;
+        // Board dimensions bounded; safe to truncate.
+        #[allow(clippy::cast_possible_truncation)]
+        let y_offset = screen_y_offset_cells(cell_pos.y, ruleset.num_rows as i8);
+        let screen_y = y0 + y_offset * cell_px;
         draw_rectangle(screen_x, screen_y, cell_px, cell_px, GHOST_COLOR);
         // Trace the piece color on the edges so the ghost is recognizable.
         draw_rectangle_lines(screen_x, screen_y, cell_px, cell_px, 1.0, color);
@@ -213,16 +228,31 @@ fn cell_px_for_box(board_cell_px: f32) -> f32 {
     board_cell_px * 0.6
 }
 
-/// Cell positions inside a 4×4 preview box, top-left origin (matches
+/// Cell positions inside a 4×4 preview/hold box, top-left origin (matches
 /// macroquad rendering). Returns the local (col, row) coordinates for each
-/// of the piece's 4 cells, normalised to the top-left corner of the box.
+/// of the piece's 4 cells, with the Y axis flipped (via
+/// `screen_y_offset_cells`) so the piece's TOP (high domain y) appears at
+/// the TOP of the box (low screen y).
 fn piece_box_cells(kind: MinoType) -> [(f32, f32); 4] {
+    const BOX_HEIGHT: i8 = 4;
     let coords = kind.coords(Orientation::North);
     [
-        (f32::from(coords[0].x), f32::from(coords[0].y)),
-        (f32::from(coords[1].x), f32::from(coords[1].y)),
-        (f32::from(coords[2].x), f32::from(coords[2].y)),
-        (f32::from(coords[3].x), f32::from(coords[3].y)),
+        (
+            f32::from(coords[0].x),
+            screen_y_offset_cells(coords[0].y, BOX_HEIGHT),
+        ),
+        (
+            f32::from(coords[1].x),
+            screen_y_offset_cells(coords[1].y, BOX_HEIGHT),
+        ),
+        (
+            f32::from(coords[2].x),
+            screen_y_offset_cells(coords[2].y, BOX_HEIGHT),
+        ),
+        (
+            f32::from(coords[3].x),
+            screen_y_offset_cells(coords[3].y, BOX_HEIGHT),
+        ),
     ]
 }
 
