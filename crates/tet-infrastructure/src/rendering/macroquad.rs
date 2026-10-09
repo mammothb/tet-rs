@@ -43,11 +43,12 @@
 
 use macroquad::prelude::*;
 use tet_application::{Frame, PlayerView, Renderer};
-use tet_domain::{Cell, MinoType, Orientation, Ruleset};
+use tet_domain::{Cell, MinoType, Ruleset};
 
 use crate::rendering::font::Fonts;
 use crate::rendering::layout::{PixelRect, plan_board};
-use crate::rendering::viewport::{Viewport, domain_to_screen_row};
+use crate::rendering::piece_box::PieceBox;
+use crate::rendering::viewport::Viewport;
 
 /// Color for locked garbage cells and the board outline. Bright enough
 /// to be clearly visible on the black background.
@@ -391,14 +392,13 @@ fn render_hold(vp: &Viewport, fonts: &Fonts) {
 
     let color = piece_color(kind);
     let piece_cell = box_size / HOLD_BOX_CELLS;
-    for (cell_x, cell_y) in piece_box_cells(kind, HOLD_BOX_CELLS) {
-        let px_phys = hold_x_phys + cell_x * piece_cell;
-        let py_phys = hold_y_phys + cell_y * piece_cell;
+    for rect in PieceBox::new(kind, (hold_x_phys, hold_y_phys), piece_cell, HOLD_BOX_CELLS).rects()
+    {
         draw_rectangle(
-            px_phys as f32,
-            py_phys as f32,
-            piece_cell as f32,
-            piece_cell as f32,
+            rect.x as f32,
+            rect.y as f32,
+            rect.w as f32,
+            rect.h as f32,
             color,
         );
     }
@@ -438,14 +438,13 @@ fn render_queue(vp: &Viewport, fonts: &Fonts) {
         );
         let color = piece_color(kind);
         let piece_cell = cell_phys;
-        for (cell_x, cell_y) in piece_box_cells(kind, HOLD_BOX_CELLS) {
-            let px = qx_phys + cell_x * piece_cell;
-            let py = qy_box_phys + cell_y * piece_cell;
+        for rect in PieceBox::new(kind, (qx_phys, qy_box_phys), piece_cell, HOLD_BOX_CELLS).rects()
+        {
             draw_rectangle(
-                px as f32,
-                py as f32,
-                piece_cell as f32,
-                piece_cell as f32,
+                rect.x as f32,
+                rect.y as f32,
+                rect.w as f32,
+                rect.h as f32,
                 color,
             );
         }
@@ -501,36 +500,6 @@ fn render_label(view: &PlayerView, vp: &Viewport, fonts: &Fonts) {
     );
 }
 
-/// Cell positions inside an N×N box, top-left origin (matches macroquad
-/// rendering). Returns the local (col, row) coordinates for each of the
-/// piece's 4 cells, with the Y axis flipped so the piece's TOP (high
-/// domain y) appears at the TOP of the box (low screen y).
-///
-/// **Migration target:** replaced by [`crate::rendering::piece_box::PieceBox`]
-/// in Phase 6 of `PLAN-renderer-refactor.md`. Kept here until then.
-fn piece_box_cells(kind: MinoType, box_cells: i32) -> [(i32, i32); 4] {
-    let box_height = box_cells;
-    let coords = kind.coords(Orientation::North);
-    [
-        (
-            coords[0].x as i32,
-            domain_to_screen_row(coords[0].y as i32, box_height),
-        ),
-        (
-            coords[1].x as i32,
-            domain_to_screen_row(coords[1].y as i32, box_height),
-        ),
-        (
-            coords[2].x as i32,
-            domain_to_screen_row(coords[2].y as i32, box_height),
-        ),
-        (
-            coords[3].x as i32,
-            domain_to_screen_row(coords[3].y as i32, box_height),
-        ),
-    ]
-}
-
 fn piece_color(t: MinoType) -> Color {
     match t {
         MinoType::I => Color::new(0.0, 0.85, 0.85, 1.0), // cyan
@@ -540,77 +509,5 @@ fn piece_color(t: MinoType) -> Color {
         MinoType::Z => Color::new(0.85, 0.0, 0.0, 1.0),  // red
         MinoType::J => Color::new(0.0, 0.0, 0.85, 1.0),  // blue
         MinoType::L => Color::new(0.95, 0.55, 0.0, 1.0), // orange
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::float_cmp)]
-mod test {
-    use super::*;
-    use rstest::rstest;
-
-    // ---- piece_box_cells ----
-    //
-    // Maps each piece's 4 cells (in domain space, bottom-up) into screen
-    // box coordinates (top-down). Y is inverted so the piece's TOP tip
-    // appears at the TOP of the rendered box.
-    //
-    // Domain coords for North orientation (from `MinoType::coords`):
-    //   T: [(0,1), (1,1), (2,1), (1,2)]   — base at y=1, tip at y=2
-    //   I: [(0,2), (1,2), (2,2), (3,2)]   — flat at y=2
-    //   O: [(1,1), (2,1), (1,2), (2,2)]   — square
-    //   L: [(0,1), (1,1), (2,1), (2,2)]
-    //   J: [(0,1), (1,1), (2,1), (0,2)]   — base at y=1, bump at y=2 x=0
-    //   S: [(1,1), (2,1), (0,2), (1,2)]
-    //   Z: [(0,1), (1,1), (1,2), (2,2)]
-    //
-    // With BOX_HEIGHT = 4, screen y = 3 - domain_y. So:
-    //   domain y=0 → screen y=3 (bottom of box)
-    //   domain y=1 → screen y=2
-    //   domain y=2 → screen y=1 (near top)
-    //   domain y=3 → screen y=0 (top of box)
-
-    #[rstest]
-    #[case(MinoType::T, 1)] // (0,2): tip at y=2 in domain → y=1 in box (near top)
-    #[case(MinoType::T, 2)] // base cells (0,1), (1,1), (2,1) all → y=2
-    #[case(MinoType::I, 1)] // (1,2) — vertical middle of box
-    #[case(MinoType::L, 1)] // (2,2) — corner piece's tall end
-    #[case(MinoType::J, 1)] // (1,1) — J base cell → y=2
-    fn piece_box_y_is_domain_y_inverted(#[case] kind: MinoType, #[case] cell_idx: usize) {
-        let cells = piece_box_cells(kind, 4);
-        let coords = kind.coords(Orientation::North);
-        let expected_screen_y = 3_i32 - (coords[cell_idx].y as i32);
-        assert_eq!(cells[cell_idx].1, expected_screen_y);
-    }
-
-    #[rstest]
-    #[case(MinoType::T, 3, 1, 1)] // (1,2) → (1, 1): tip at top of box
-    #[case(MinoType::I, 0, 0, 1)] // (0,2) → (0, 1): leftmost I cell
-    #[case(MinoType::O, 0, 1, 2)] // (1,1) → (1, 2): O is a 2x2 square
-    #[case(MinoType::O, 3, 2, 1)] // (2,2) → (2, 1): top-right of O
-    #[case(MinoType::J, 3, 0, 1)] // (0,2) → (0, 1): J's top bump at the very top-left
-    fn piece_box_specific_cells(
-        #[case] kind: MinoType,
-        #[case] cell_idx: usize,
-        #[case] expected_x: i32,
-        #[case] expected_y: i32,
-    ) {
-        let cells = piece_box_cells(kind, 4);
-        assert_eq!(cells[cell_idx], (expected_x, expected_y));
-    }
-
-    #[rstest]
-    fn piece_box_returns_exactly_4_cells() {
-        for kind in [
-            MinoType::T,
-            MinoType::I,
-            MinoType::O,
-            MinoType::S,
-            MinoType::Z,
-            MinoType::J,
-            MinoType::L,
-        ] {
-            assert_eq!(piece_box_cells(kind, 4).len(), 4);
-        }
     }
 }
