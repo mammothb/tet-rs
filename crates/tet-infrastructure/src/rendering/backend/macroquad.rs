@@ -43,27 +43,21 @@
 
 use macroquad::prelude::*;
 use tet_application::{Frame, PlayerView, Renderer};
-use tet_domain::{MinoType, Ruleset};
+use tet_domain::Ruleset;
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
 use crate::rendering::board;
 use crate::rendering::font::Fonts;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::piece;
-use crate::rendering::piece_box::PieceBox;
+use crate::rendering::side_panel;
 use crate::rendering::theme::{Palette, Theme};
 use crate::rendering::viewport::Viewport;
-
-/// Color for locked garbage cells and the board outline. Bright enough
-/// to be clearly visible on the black background.
-const STRUCTURE_COLOR: Color = Color::new(80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0);
 
 /// White text for HUD elements.
 const TEXT_COLOR: Color = WHITE;
 
 const HUD_FONT_SIZE: f32 = 18.0;
-const HOLD_BOX_CELLS: i32 = 4;
-const QUEUE_PREVIEW_CELL_PX: f32 = 16.0;
 const QUEUE_PREVIEW_SPACING: f32 = 4.0;
 /// Vertical offset from the nearest edge for labels (HOLD, NEXT, stats,
 /// player name). The text baseline sits at this offset above the edge,
@@ -106,15 +100,6 @@ fn draw_label(text: &str, x: f32, y: f32, font_size: u16, font: &Font, color: Co
             rotation: 0.0,
         },
     );
-}
-
-/// Draw a 4-edge outline of a `PixelRect`. Each edge is a 1-pixel-thick
-/// filled rectangle at integer physical-pixel positions.
-fn draw_outline(rect: PixelRect, color: Color) {
-    draw_h_line(rect.x, rect.y, rect.w, color);
-    draw_h_line(rect.x, rect.bottom_pixel(), rect.w, color);
-    draw_v_line(rect.x, rect.y, rect.h, color);
-    draw_v_line(rect.right_pixel(), rect.y, rect.h, color);
 }
 
 pub struct MacroquadRenderer {
@@ -172,106 +157,11 @@ fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut Macr
 
     board::draw(&vp, &theme, &mut *canvas);
     piece::draw(&vp, &theme, view.ghost, &mut *canvas);
+    side_panel::draw(&vp, &theme, &mut *canvas);
 
     let fonts = canvas.fonts();
-    if vp.layout().show_hold {
-        render_hold(&vp, fonts);
-    }
-    if vp.layout().show_queue {
-        render_queue(&vp, fonts);
-    }
     render_stats(&vp, fonts);
     render_label(view, &vp, fonts);
-}
-
-fn render_hold(vp: &Viewport, fonts: &Fonts) {
-    let layout = vp.layout();
-    let (ox, oy) = vp.origin_pixel();
-    let cw = vp.cell_px_phys();
-    let box_size = cw * HOLD_BOX_CELLS;
-    let hold_x_phys = ox - (box_size + 4);
-    let hold_y_phys = oy;
-
-    // Box outline + filled piece cells use integer physical pixels.
-    draw_outline(
-        PixelRect::new(hold_x_phys, hold_y_phys, box_size, box_size),
-        STRUCTURE_COLOR,
-    );
-
-    // Label sits above the box. Logical f32 coords (matches existing
-    // label rendering — `draw_label` historically took pre-DPI floats).
-    draw_label(
-        "HOLD",
-        layout.origin.0 - (box_size + 4) as f32,
-        (hold_y_phys as f32) - LABEL_PADDING,
-        HUD_FONT_SIZE as u16,
-        &fonts.semibold,
-        TEXT_COLOR,
-    );
-
-    let Some(kind) = vp.snapshot().hold else {
-        return;
-    };
-
-    let color = piece_color(kind);
-    let piece_cell = box_size / HOLD_BOX_CELLS;
-    for rect in PieceBox::new(kind, (hold_x_phys, hold_y_phys), piece_cell, HOLD_BOX_CELLS).rects()
-    {
-        draw_rectangle(
-            rect.x as f32,
-            rect.y as f32,
-            rect.w as f32,
-            rect.h as f32,
-            color,
-        );
-    }
-}
-
-fn render_queue(vp: &Viewport, fonts: &Fonts) {
-    let layout = vp.layout();
-    let ruleset = vp.ruleset();
-    let (ox, oy) = vp.origin_pixel();
-    let cw = vp.cell_px_phys();
-    // Queue preview cells are sized independently of the board's
-    // cell_px. They're drawn in a column to the right of the board.
-    let cell_phys = (QUEUE_PREVIEW_CELL_PX * vp.dpi()).round() as i32;
-    let box_phys = cell_phys * HOLD_BOX_CELLS;
-    let bw = cw * ruleset.num_cols as i32;
-    let spacing_phys = (QUEUE_PREVIEW_SPACING * vp.dpi()).round() as i32;
-    let qx_phys = ox + bw + spacing_phys;
-    let qy_phys = oy;
-
-    // NEXT label — logical f32, see comment on `draw_label`.
-    draw_label(
-        "NEXT",
-        layout.origin.0 + layout.cell_px * ruleset.num_cols as f32,
-        (qy_phys as f32) - LABEL_PADDING,
-        HUD_FONT_SIZE as u16,
-        &fonts.semibold,
-        TEXT_COLOR,
-    );
-
-    let preview_count = ruleset.num_preview.min(vp.snapshot().queue.len());
-    for i in 0..preview_count {
-        let kind = vp.snapshot().queue[i];
-        let qy_box_phys = qy_phys + i as i32 * (box_phys + spacing_phys);
-        draw_outline(
-            PixelRect::new(qx_phys, qy_box_phys, box_phys, box_phys),
-            STRUCTURE_COLOR,
-        );
-        let color = piece_color(kind);
-        let piece_cell = cell_phys;
-        for rect in PieceBox::new(kind, (qx_phys, qy_box_phys), piece_cell, HOLD_BOX_CELLS).rects()
-        {
-            draw_rectangle(
-                rect.x as f32,
-                rect.y as f32,
-                rect.w as f32,
-                rect.h as f32,
-                color,
-            );
-        }
-    }
 }
 
 fn render_stats(vp: &Viewport, fonts: &Fonts) {
@@ -323,27 +213,14 @@ fn render_label(view: &PlayerView, vp: &Viewport, fonts: &Fonts) {
     );
 }
 
-fn piece_color(t: MinoType) -> Color {
-    match t {
-        MinoType::I => Color::new(0.0, 0.85, 0.85, 1.0), // cyan
-        MinoType::O => Color::new(0.95, 0.85, 0.0, 1.0), // yellow
-        MinoType::T => Color::new(0.55, 0.0, 0.55, 1.0), // purple
-        MinoType::S => Color::new(0.0, 0.85, 0.0, 1.0),  // green
-        MinoType::Z => Color::new(0.85, 0.0, 0.0, 1.0),  // red
-        MinoType::J => Color::new(0.0, 0.0, 0.85, 1.0),  // blue
-        MinoType::L => Color::new(0.95, 0.55, 0.0, 1.0), // orange
-    }
-}
-
 // ---- `Canvas` impl for macroquad ----
 //
-// Phase 9 of `PLAN-renderer-refactor.md`. The port impl above
-// (helpers, `render_*` functions, `piece_color`) stays put — the
-// `Canvas` impl below is a **backend-internal** adapter that the
-// later feature-module migration (Phase 11+) will consume. Co-locating
-// here keeps the `draw_h_line` / `draw_v_line` / `draw_label` /
-// `draw_outline` helpers and their `Canvas`-method counterparts in
-// one file.
+// The port impl above (helpers + per-feature `render_*` functions)
+// stays put — the `Canvas` impl below is a **backend-internal**
+// adapter that the per-feature modules (`board/`, `piece/`,
+// `side_panel/`, `hud/`) consume. Co-locating here keeps the
+// `draw_h_line` / `draw_v_line` / `draw_label` helpers and their
+// `Canvas`-method counterparts in one file.
 
 /// Convert an 8-bit [`Palette`] to a `0.0..=1.0` float `Color`
 /// matching macroquad's `Color::new(r, g, b, a)` representation.
