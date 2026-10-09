@@ -40,7 +40,7 @@
     clippy::cast_precision_loss
 )]
 
-use tet_application::{Layout, PlayerView};
+use tet_application::PlayerView;
 use tet_domain::Ruleset;
 
 /// Integer-pixel rectangle. All four are physical pixel positions.
@@ -98,12 +98,6 @@ pub struct BoxLayout {
     pub rect: PixelRect,
 }
 
-/// Plan for a filled cell (locked piece on the board).
-#[derive(Clone, Copy, Debug)]
-pub struct FilledCell {
-    pub rect: PixelRect,
-}
-
 /// Plan a board's outline + grid lines for one view.
 ///
 /// All positions are integer physical pixels. `cell_px * dpi` is rounded
@@ -155,25 +149,6 @@ pub fn plan_box(pos: (f32, f32), size_phys: i32, dpi: f32) -> BoxLayout {
     BoxLayout {
         rect: PixelRect::new(x, y, size_phys, size_phys),
     }
-}
-
-/// Plan a filled cell at `pos` with the given cell size in physical pixels.
-#[must_use]
-pub fn plan_filled_cell(pos: (f32, f32), size_phys: i32, dpi: f32) -> FilledCell {
-    let x = (pos.0 * dpi).round() as i32;
-    let y = (pos.1 * dpi).round() as i32;
-    FilledCell {
-        rect: PixelRect::new(x, y, size_phys, size_phys),
-    }
-}
-
-/// Compute the screen pixel position (top-left of cell) for a logical
-/// `(col, row)` cell, given the board's `origin` and `cell_px`.
-#[must_use]
-pub fn cell_origin(layout: &Layout, col: i32, row: i32, dpi: f32) -> (f32, f32) {
-    let x = (layout.origin.0 + (col) as f32 * layout.cell_px) * dpi;
-    let y = (layout.origin.1 + (row) as f32 * layout.cell_px) * dpi;
-    (x / dpi, y / dpi)
 }
 
 #[cfg(test)]
@@ -353,19 +328,6 @@ mod test {
         assert_eq!(plan.rect.h, 64);
         assert_eq!(plan.rect.right_pixel(), 423);
         assert_eq!(plan.rect.bottom_pixel(), 79);
-    }
-
-    #[rstest]
-    fn cell_origin_returns_logical_coords() {
-        // For a cell at col=2, row=3 in a 24px grid at origin (100, 200):
-        let l = Layout {
-            origin: (100.0, 200.0),
-            cell_px: 24.0,
-            ..Layout::default()
-        };
-        let (x, y) = cell_origin(&l, 2, 3, dpi1());
-        assert_eq!(x, 100.0 + 2.0 * 24.0);
-        assert_eq!(y, 200.0 + 3.0 * 24.0);
     }
 
     #[rstest]
