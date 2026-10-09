@@ -1,6 +1,10 @@
 pub mod backend;
+pub mod board;
 pub mod font;
+pub mod hud;
 pub mod layout;
+pub mod piece;
 pub mod piece_box;
+pub mod side_panel;
 pub mod theme;
 pub mod viewport;
