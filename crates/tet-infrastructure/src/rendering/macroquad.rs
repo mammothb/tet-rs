@@ -2,16 +2,21 @@
 //!
 //! Drawing happens in screen-pixel coordinates with `y` down (macroquad's
 //! convention). The domain is `y` up. The renderer flips `y` once per cell
-//! via [`screen_y_offset_cells`] so the application layer never touches the
-//! flip.
+//! via [`crate::rendering::viewport::domain_to_screen_row`] so the
+//! application layer never touches the flip.
 //!
 //! ## No math at draw time
 //!
-//! Every pixel position comes from [`crate::rendering::layout`]. The layout
-//! planner computes integer physical-pixel coordinates for every rect and
-//! every line up front. The renderer just iterates the plan and calls
-//! `draw_rectangle` with `width=1` or `height=1` for lines — no subpixel
-//! math, no half-pixel offsets, no anti-aliasing of edges.
+//! Every pixel position comes from either the layout planner
+//! ([`crate::rendering::layout`]) or the [`Viewport`] helpers. The
+//! renderer just iterates the plan and calls `draw_rectangle` with
+//! `width=1` or `height=1` for lines — no subpixel math, no half-pixel
+//! offsets, no anti-aliasing of edges.
+//!
+//! Per-view data (`PlayerSnapshot`, `Layout`, `Ruleset`, `dpi`) is
+//! bundled once at the top of `render_view` into a `Viewport`; helper
+//! functions read pixel positions from `&Viewport` so the `(x * dpi)
+//! round() as i32` duplication disappears.
 //!
 //! ## Fonts
 //!
@@ -21,21 +26,28 @@
 
 // All integer/float casts in this file are bounded by domain invariants
 // (board dims ≤ 128, dpi ≤ 4, cell sizes ≤ 128 logical) — well within
-// both `i32` and `f32` mantissa range. Suppress the pedantic warnings.
+// both `i32` and `f32` mantissa range.
+//
+// `clippy::similar_names` is also allowed at file scope: every
+// feature module pairs `x` and `y` for rect coordinates, and finding
+// non-overlapping name pairs (without renaming the whole concept)
+// produces more obfuscation than clarity.
 #![allow(
+    clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
-    clippy::cast_lossless
+    clippy::similar_names
 )]
 
 use macroquad::prelude::*;
-use tet_application::{Frame, GridStyle, PlayerView, Renderer};
+use tet_application::{Frame, PlayerView, Renderer};
 use tet_domain::{Cell, MinoType, Orientation, Ruleset};
 
 use crate::rendering::font::Fonts;
-use crate::rendering::layout::{PixelRect, plan_board, plan_box};
+use crate::rendering::layout::{PixelRect, plan_board};
+use crate::rendering::viewport::{Viewport, domain_to_screen_row};
 
 /// Color for locked garbage cells and the board outline. Bright enough
 /// to be clearly visible on the black background.
@@ -74,12 +86,6 @@ const QUEUE_PREVIEW_SPACING: f32 = 4.0;
 /// got cut off. `0.0` keeps it below.
 const LABEL_PADDING: f32 = 0.0;
 
-/// Convert a domain Y coordinate (0 = bottom, growing up) to a y-offset,
-/// in cells, from the TOP of a region of the given height.
-fn screen_y_offset_cells(domain_y: i8, region_height_cells: i8) -> f32 {
-    (region_height_cells - 1 - domain_y) as f32
-}
-
 /// Draw a 1-pixel-tall horizontal line as a filled rectangle covering
 /// pixel row `y_phys` from column `x_phys` to `x_phys + width_phys - 1`.
 fn draw_h_line(x_phys: i32, y_phys: i32, width_phys: i32, color: Color) {
@@ -93,7 +99,10 @@ fn draw_v_line(x_phys: i32, y_phys: i32, height_phys: i32, color: Color) {
 }
 
 /// Draw text at the given logical position with the given font. Wraps
-/// `draw_text_ex` so the call sites don't need to construct `TextParams`.
+/// `draw_text_ex` so the call sites don't need to construct
+/// `TextParams`. Positions are in **logical pixels** — the existing
+/// render label code paths pass logical-pixel floats and macroquad
+/// accepts that scale; we preserve that here.
 fn draw_label(text: &str, x: f32, y: f32, font_size: u16, font: &Font, color: Color) {
     draw_text_ex(
         text,
@@ -156,37 +165,43 @@ impl Renderer for MacroquadRenderer {
     }
 }
 
+/// Build a [`Viewport`] from a `PlayerView` and dispatch to per-feature
+/// renderers. The dispatch order matters: outline + grid behind locked
+/// cells, hold/queue around the board, HUD on top.
 fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
-    render_board(view, ruleset, dpi);
-    render_active_piece(view, ruleset, dpi);
+    let vp = Viewport::new(&view.snapshot, &view.layout, ruleset, dpi);
+
+    render_board(view, &vp);
+    render_active_piece(&vp);
     if let Some(ghost) = view.ghost {
-        render_ghost(view, ruleset, ghost, dpi);
+        render_ghost(&vp, ghost);
     }
-    if view.layout.show_hold {
-        render_hold(view, dpi, fonts);
+    if vp.layout().show_hold {
+        render_hold(&vp, fonts);
     }
-    if view.layout.show_queue {
-        render_queue(view, ruleset, dpi, fonts);
+    if vp.layout().show_queue {
+        render_queue(&vp, fonts);
     }
-    render_stats(view, ruleset, dpi, fonts);
-    render_label(view, ruleset, dpi, fonts);
+    render_stats(&vp, fonts);
+    render_label(view, &vp, fonts);
 }
 
-fn render_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
-    let plan = plan_board(view, ruleset, dpi);
+fn render_board(view: &PlayerView, vp: &Viewport) {
+    let plan = plan_board(view, vp.ruleset(), vp.dpi());
 
     // Draw order matters:
     //   1. Faint grid lines (cover the full board, including the rect edges)
     //   2. Brighter "cross" segments at each grid intersection
-    //   3. Outer outline LAST (so the border overwrites the faint grid
-    //      color at the rect edges with the brighter STRUCTURE_COLOR)
+    //   3. Locked cells
+    //   4. Outer outline LAST (overwrites the faint grid color at the
+    //      rect edges with the brighter STRUCTURE_COLOR).
     let draw_h = matches!(
-        view.layout.grid_style,
-        GridStyle::Horizontal | GridStyle::Full
+        vp.layout().grid_style,
+        tet_application::GridStyle::Horizontal | tet_application::GridStyle::Full
     );
     let draw_v = matches!(
-        view.layout.grid_style,
-        GridStyle::Vertical | GridStyle::Full
+        vp.layout().grid_style,
+        tet_application::GridStyle::Vertical | tet_application::GridStyle::Full
     );
 
     // Pass 1: faint base lines spanning the whole board.
@@ -206,18 +221,19 @@ fn render_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
         }
     }
 
-    // Pass 2: brighter "cross" segments at each grid intersection. To
-    // create a visible fade from the dim base line to a brighter corner,
-    // we draw multiple overlapping layers per arm. Layers are painted
-    // outermost-first (faint, long) so each inner layer (closer to the
-    // corner, higher alpha) overwrites the area it covers with a
-    // brighter pixel. The result is a gradient: brightest at the corner
-    // pixel, fading smoothly outward.
+    // Pass 2: brighter "cross" segments at each grid intersection.
     //
-    // At rect-edge corners each arm is clipped to the rect bounds so it
-    // never extends past the border.
+    // To create a visible fade from the dim base line to a brighter
+    // corner, we draw multiple overlapping layers per arm. Layers are
+    // painted outermost-first (faint, long) so each inner layer
+    // (closer to the corner, higher alpha) overwrites the area it
+    // covers with a brighter pixel. The result is a gradient:
+    // brightest at the corner pixel, fading smoothly outward.
+    //
+    // At rect-edge corners each arm is clipped to the rect bounds so
+    // it never extends past the border.
     if draw_h && draw_v {
-        let cell_phys = (view.layout.cell_px * dpi).round() as i32;
+        let cell_phys = vp.cell_px_phys();
         let x_lo = plan.outer.x;
         let x_hi = plan.outer.right_pixel() + 1; // exclusive
         let y_lo = plan.outer.y;
@@ -265,27 +281,14 @@ fn render_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
         }
     }
 
-    // Pass 3: outer outline, drawn last so the border overwrites the
-    // faint grid line color at the rect edges with the brighter color.
-    draw_outline(plan.outer, STRUCTURE_COLOR);
-
-    // Locked cells. `Board::rows()` yields bottom-to-top; macroquad y is
-    // top-to-bottom. Skip buffer rows (y >= visible_rows).
-    for (row, board_row) in view
-        .snapshot
-        .board
-        .rows()
-        .enumerate()
-        .take(plan.outer.h as usize / 24)
-    {
+    // Pass 3: locked cells. `Board::rows()` yields bottom-to-top;
+    // `Viewport::cell_pixel` flips the Y axis. Skip buffer rows above
+    // the visible window (`num_visible_rows`).
+    let cw = vp.cell_px_phys();
+    let visible_rows = vp.ruleset().num_visible_rows;
+    for (row, board_row) in vp.snapshot().board.rows().enumerate().take(visible_rows) {
         for (col, cell) in board_row.iter().enumerate() {
-            let x_phys = plan.outer.x + col as i32 * (plan.outer.w / ruleset.num_cols as i32);
-            #[allow(clippy::cast_possible_truncation)]
-            let y_offset_cells = screen_y_offset_cells(row as i8, ruleset.num_visible_rows as i8);
-            let y_phys = plan.outer.y
-                + (y_offset_cells as i32) * (plan.outer.h / ruleset.num_visible_rows as i32);
-            let cw = plan.outer.w / ruleset.num_cols as i32;
-
+            let (x_phys, y_phys) = vp.cell_pixel(col as i32, row as i32);
             match cell {
                 Cell::Empty => {}
                 Cell::Block(t) => {
@@ -309,145 +312,152 @@ fn render_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
             }
         }
     }
+
+    // Pass 4: outer outline, drawn last so the border overwrites the
+    // faint grid line color at the rect edges with the brighter color.
+    draw_outline(plan.outer, STRUCTURE_COLOR);
 }
 
-fn render_active_piece(view: &PlayerView, ruleset: &Ruleset, dpi: f32) {
-    let cell_px_phys = (view.layout.cell_px * dpi).round() as i32;
-    let color = piece_color(view.snapshot.current.kind);
-    let (ox, oy) = (view.layout.origin.0, view.layout.origin.1);
+fn render_active_piece(vp: &Viewport) {
+    let color = piece_color(vp.snapshot().current.kind);
+    let cw = vp.cell_px_phys();
+    let visible_rows = vp.ruleset().num_visible_rows as i32;
 
-    for cell_pos in view.snapshot.current.cells() {
-        let col = cell_pos.x;
-        let row_in_visible = ruleset.num_visible_rows as i8 - 1 - cell_pos.y;
-        if row_in_visible < 0 || row_in_visible >= ruleset.num_visible_rows as i8 {
+    for cell_pos in vp.snapshot().current.cells() {
+        let col = i32::from(cell_pos.x);
+        let domain_row = i32::from(cell_pos.y);
+        if domain_row < 0 || domain_row >= visible_rows {
             continue;
         }
-        let x_phys = (ox + (col) as f32 * view.layout.cell_px) * dpi;
-        let y_phys = (oy + (row_in_visible) as f32 * view.layout.cell_px) * dpi;
-        draw_rectangle(
-            x_phys.round() / dpi,
-            y_phys.round() / dpi,
-            cell_px_phys as f32,
-            cell_px_phys as f32,
-            color,
-        );
+        let (x_phys, y_phys) = vp.cell_pixel(col, domain_row);
+        draw_rectangle(x_phys as f32, y_phys as f32, cw as f32, cw as f32, color);
     }
 }
 
-fn render_ghost(view: &PlayerView, ruleset: &Ruleset, ghost: tet_domain::Vec2, dpi: f32) {
-    let (ox, oy) = (view.layout.origin.0, view.layout.origin.1);
-    let cell_px = view.layout.cell_px;
-    let cell_px_phys = (cell_px * dpi).round() as i32;
-    let color = piece_color(view.snapshot.current.kind);
+fn render_ghost(vp: &Viewport, ghost: tet_domain::Vec2) {
+    let color = piece_color(vp.snapshot().current.kind);
+    let cur_pos = vp.snapshot().current.pos;
+    let pos_offset_x = i32::from(ghost.x) - i32::from(cur_pos.x);
+    let pos_offset_y = i32::from(ghost.y) - i32::from(cur_pos.y);
+    let visible_rows = vp.ruleset().num_visible_rows as i32;
+    let cw = vp.cell_px_phys();
 
-    let cur_pos = view.snapshot.current.pos;
-    let pos_offset_x = ghost.x - cur_pos.x;
-    let pos_offset_y = ghost.y - cur_pos.y;
-
-    for cell_offset in view.snapshot.current.cells() {
-        let cell_col = cell_offset.x + pos_offset_x;
-        let cell_row_in_visible =
-            ruleset.num_visible_rows as i8 - 1 - (cell_offset.y + pos_offset_y);
-        if cell_row_in_visible < 0 || cell_row_in_visible >= ruleset.num_visible_rows as i8 {
+    for cell_offset in vp.snapshot().current.cells() {
+        let cell_col = i32::from(cell_offset.x) + pos_offset_x;
+        let cell_domain_row = i32::from(cell_offset.y) + pos_offset_y;
+        if cell_domain_row < 0 || cell_domain_row >= visible_rows {
             continue;
         }
-        let pos = (
-            ox + (cell_col) as f32 * cell_px,
-            oy + (cell_row_in_visible) as f32 * cell_px,
-        );
-        let plan = plan_box(pos, cell_px_phys, dpi);
+        let (x_phys, y_phys) = vp.cell_pixel(cell_col, cell_domain_row);
         draw_rectangle(
-            plan.rect.x as f32,
-            plan.rect.y as f32,
-            plan.rect.w as f32,
-            plan.rect.h as f32,
+            x_phys as f32,
+            y_phys as f32,
+            cw as f32,
+            cw as f32,
             GHOST_COLOR,
         );
-        draw_outline(plan.rect, color);
+        draw_outline(PixelRect::new(x_phys, y_phys, cw, cw), color);
     }
 }
 
-fn render_hold(view: &PlayerView, dpi: f32, fonts: &Fonts) {
-    let layout = &view.layout;
-    let box_size_phys = ((layout.cell_px * dpi).round() as i32) * HOLD_BOX_CELLS;
-    let hold_x = layout.origin.0 - (box_size_phys + 4) as f32;
-    let hold_y = layout.origin.1;
-    let plan = plan_box((hold_x, hold_y), box_size_phys, dpi);
-    draw_outline(plan.rect, STRUCTURE_COLOR);
+fn render_hold(vp: &Viewport, fonts: &Fonts) {
+    let layout = vp.layout();
+    let (ox, oy) = vp.origin_pixel();
+    let cw = vp.cell_px_phys();
+    let box_size = cw * HOLD_BOX_CELLS;
+    let hold_x_phys = ox - (box_size + 4);
+    let hold_y_phys = oy;
+
+    // Box outline + filled piece cells use integer physical pixels.
+    draw_outline(
+        PixelRect::new(hold_x_phys, hold_y_phys, box_size, box_size),
+        STRUCTURE_COLOR,
+    );
+
+    // Label sits above the box. Logical f32 coords (matches existing
+    // label rendering — `draw_label` historically took pre-DPI floats).
     draw_label(
         "HOLD",
-        hold_x,
-        hold_y - LABEL_PADDING,
+        layout.origin.0 - (box_size + 4) as f32,
+        (hold_y_phys as f32) - LABEL_PADDING,
         HUD_FONT_SIZE as u16,
         &fonts.semibold,
         TEXT_COLOR,
     );
 
-    let Some(kind) = view.snapshot.hold else {
+    let Some(kind) = vp.snapshot().hold else {
         return;
     };
 
     let color = piece_color(kind);
-    let piece_cell = box_size_phys / HOLD_BOX_CELLS;
-    for cell in piece_box_cells(kind, HOLD_BOX_CELLS) {
-        let px = hold_x + (cell.0) as f32 * (piece_cell) as f32;
-        let py = hold_y + (cell.1) as f32 * (piece_cell) as f32;
-        let cell_plan = plan_box((px, py), piece_cell, dpi);
+    let piece_cell = box_size / HOLD_BOX_CELLS;
+    for (cell_x, cell_y) in piece_box_cells(kind, HOLD_BOX_CELLS) {
+        let px_phys = hold_x_phys + cell_x * piece_cell;
+        let py_phys = hold_y_phys + cell_y * piece_cell;
         draw_rectangle(
-            cell_plan.rect.x as f32,
-            cell_plan.rect.y as f32,
-            cell_plan.rect.w as f32,
-            cell_plan.rect.h as f32,
+            px_phys as f32,
+            py_phys as f32,
+            piece_cell as f32,
+            piece_cell as f32,
             color,
         );
     }
 }
 
-fn render_queue(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
-    let layout = &view.layout;
-    let cell_phys = (QUEUE_PREVIEW_CELL_PX * dpi).round() as i32;
+fn render_queue(vp: &Viewport, fonts: &Fonts) {
+    let layout = vp.layout();
+    let ruleset = vp.ruleset();
+    let (ox, oy) = vp.origin_pixel();
+    let cw = vp.cell_px_phys();
+    // Queue preview cells are sized independently of the board's
+    // cell_px. They're drawn in a column to the right of the board.
+    let cell_phys = (QUEUE_PREVIEW_CELL_PX * vp.dpi()).round() as i32;
     let box_phys = cell_phys * HOLD_BOX_CELLS;
-    let bw = ((layout.cell_px * dpi).round() as i32) * ruleset.num_cols as i32;
-    let bx = (layout.origin.0 * dpi).round() as i32;
-    let by = (layout.origin.1 * dpi).round() as i32;
-    let qx = bx + bw + (QUEUE_PREVIEW_SPACING * dpi).round() as i32;
-    let qy = by;
+    let bw = cw * ruleset.num_cols as i32;
+    let spacing_phys = (QUEUE_PREVIEW_SPACING * vp.dpi()).round() as i32;
+    let qx_phys = ox + bw + spacing_phys;
+    let qy_phys = oy;
 
+    // NEXT label — logical f32, see comment on `draw_label`.
     draw_label(
         "NEXT",
         layout.origin.0 + layout.cell_px * ruleset.num_cols as f32,
-        layout.origin.1 - LABEL_PADDING,
+        (qy_phys as f32) - LABEL_PADDING,
         HUD_FONT_SIZE as u16,
         &fonts.semibold,
         TEXT_COLOR,
     );
 
-    let preview_count = ruleset.num_preview.min(view.snapshot.queue.len());
+    let preview_count = ruleset.num_preview.min(vp.snapshot().queue.len());
     for i in 0..preview_count {
-        let kind = view.snapshot.queue[i];
-        let qy_box = qy + i as i32 * (box_phys + (QUEUE_PREVIEW_SPACING * dpi).round() as i32);
-        let plan = plan_box((qx as f32, qy_box as f32), box_phys, dpi);
-        draw_outline(plan.rect, STRUCTURE_COLOR);
+        let kind = vp.snapshot().queue[i];
+        let qy_box_phys = qy_phys + i as i32 * (box_phys + spacing_phys);
+        draw_outline(
+            PixelRect::new(qx_phys, qy_box_phys, box_phys, box_phys),
+            STRUCTURE_COLOR,
+        );
         let color = piece_color(kind);
         let piece_cell = cell_phys;
-        for cell in piece_box_cells(kind, HOLD_BOX_CELLS) {
-            let px = qx as f32 + (cell.0) as f32 * (piece_cell) as f32;
-            let py = qy_box as f32 + (cell.1) as f32 * (piece_cell) as f32;
-            let cell_plan = plan_box((px, py), piece_cell, dpi);
+        for (cell_x, cell_y) in piece_box_cells(kind, HOLD_BOX_CELLS) {
+            let px = qx_phys + cell_x * piece_cell;
+            let py = qy_box_phys + cell_y * piece_cell;
             draw_rectangle(
-                cell_plan.rect.x as f32,
-                cell_plan.rect.y as f32,
-                cell_plan.rect.w as f32,
-                cell_plan.rect.h as f32,
+                px as f32,
+                py as f32,
+                piece_cell as f32,
+                piece_cell as f32,
                 color,
             );
         }
     }
 }
 
-fn render_stats(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) {
-    let layout = &view.layout;
+fn render_stats(vp: &Viewport, fonts: &Fonts) {
+    let layout = vp.layout();
+    let ruleset = vp.ruleset();
     let (ox, oy) = (layout.origin.0, layout.origin.1);
+    // Logical f32 throughout — stats text uses the same pre-DPI
+    // convention as `draw_label` (see `render_hold`).
     let stats_y =
         oy + layout.cell_px * ruleset.num_visible_rows as f32 + HUD_FONT_SIZE + LABEL_PADDING;
     let mut line: i32 = 0;
@@ -463,17 +473,23 @@ fn render_stats(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) 
         );
         line += 1;
     };
-    text(&format!("combo: {}", view.snapshot.combo));
-    text(&format!("b2b: {}", view.snapshot.b2b));
+    text(&format!("combo: {}", vp.snapshot().combo));
+    text(&format!("b2b: {}", vp.snapshot().b2b));
 }
 
-fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) {
+/// `PlayerView::label` lives on `PlayerView`, not `PlayerSnapshot` —
+/// not surfaced via the `Viewport` since it isn't a render-layout
+/// concern. The `view` parameter here is just for that one accessor.
+fn render_label(view: &PlayerView, vp: &Viewport, fonts: &Fonts) {
     if view.label.is_empty() {
         return;
     }
-    let layout = &view.layout;
-    let (ox, oy) = (layout.origin.0, layout.origin.1);
+    let layout = view.layout;
+    let ruleset = vp.ruleset();
+    let ox = layout.origin.0;
+    let oy = layout.origin.1;
     let queue_x = ox + layout.cell_px * ruleset.num_cols as f32 + QUEUE_PREVIEW_SPACING;
+    // Logical f32 — matches existing label-rendering convention.
     let label_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 - LABEL_PADDING;
     draw_label(
         view.label,
@@ -489,25 +505,28 @@ fn render_label(view: &PlayerView, ruleset: &Ruleset, _dpi: f32, fonts: &Fonts) 
 /// rendering). Returns the local (col, row) coordinates for each of the
 /// piece's 4 cells, with the Y axis flipped so the piece's TOP (high
 /// domain y) appears at the TOP of the box (low screen y).
+///
+/// **Migration target:** replaced by [`crate::rendering::piece_box::PieceBox`]
+/// in Phase 6 of `PLAN-renderer-refactor.md`. Kept here until then.
 fn piece_box_cells(kind: MinoType, box_cells: i32) -> [(i32, i32); 4] {
     let box_height = box_cells;
     let coords = kind.coords(Orientation::North);
     [
         (
             coords[0].x as i32,
-            screen_y_offset_cells(coords[0].y, box_height as i8) as i32,
+            domain_to_screen_row(coords[0].y as i32, box_height),
         ),
         (
             coords[1].x as i32,
-            screen_y_offset_cells(coords[1].y, box_height as i8) as i32,
+            domain_to_screen_row(coords[1].y as i32, box_height),
         ),
         (
             coords[2].x as i32,
-            screen_y_offset_cells(coords[2].y, box_height as i8) as i32,
+            domain_to_screen_row(coords[2].y as i32, box_height),
         ),
         (
             coords[3].x as i32,
-            screen_y_offset_cells(coords[3].y, box_height as i8) as i32,
+            domain_to_screen_row(coords[3].y as i32, box_height),
         ),
     ]
 }
@@ -530,42 +549,6 @@ mod test {
     use super::*;
     use rstest::rstest;
 
-    // ---- screen_y_offset_cells ----
-    //
-    // Maps domain Y (0 = bottom, growing up) to a y-offset in cells from
-    // the TOP of the region. Inverted so a piece's bottom (domain_y=0)
-    // appears at the BOTTOM of the rendered box.
-
-    #[rstest]
-    #[case(0_i8, 4_i8, 3.0)] // bottom of domain → bottom of screen (offset 3 in a 4-cell region)
-    #[case(1_i8, 4_i8, 2.0)]
-    #[case(2_i8, 4_i8, 1.0)]
-    #[case(3_i8, 4_i8, 0.0)] // top of domain → top of screen
-    fn screen_offset_inverts_domain_y_for_4_cell_region(
-        #[case] domain_y: i8,
-        #[case] region_cells: i8,
-        #[case] expected_offset: f32,
-    ) {
-        assert_eq!(
-            screen_y_offset_cells(domain_y, region_cells),
-            expected_offset
-        );
-    }
-
-    #[rstest]
-    #[case(0_i8, 20_i8, 19.0)] // 20 visible rows: bottom = offset 19
-    #[case(19_i8, 20_i8, 0.0)] // top row of visible = offset 0
-    fn screen_offset_scales_with_region_height(
-        #[case] domain_y: i8,
-        #[case] region_cells: i8,
-        #[case] expected_offset: f32,
-    ) {
-        assert_eq!(
-            screen_y_offset_cells(domain_y, region_cells),
-            expected_offset
-        );
-    }
-
     // ---- piece_box_cells ----
     //
     // Maps each piece's 4 cells (in domain space, bottom-up) into screen
@@ -577,11 +560,11 @@ mod test {
     //   I: [(0,2), (1,2), (2,2), (3,2)]   — flat at y=2
     //   O: [(1,1), (2,1), (1,2), (2,2)]   — square
     //   L: [(0,1), (1,1), (2,1), (2,2)]
-    //   J: [(0,1), (1,1), (2,1), (0,2)] — base at y=1, bump at y=2 x=0
+    //   J: [(0,1), (1,1), (2,1), (0,2)]   — base at y=1, bump at y=2 x=0
     //   S: [(1,1), (2,1), (0,2), (1,2)]
     //   Z: [(0,1), (1,1), (1,2), (2,2)]
     //
-    // With BOX_HEIGHT = 4, screen_y_offset_cells(y, 4) = 3 - y. So:
+    // With BOX_HEIGHT = 4, screen y = 3 - domain_y. So:
     //   domain y=0 → screen y=3 (bottom of box)
     //   domain y=1 → screen y=2
     //   domain y=2 → screen y=1 (near top)
