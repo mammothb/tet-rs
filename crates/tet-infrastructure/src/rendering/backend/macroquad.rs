@@ -43,11 +43,12 @@
 
 use macroquad::prelude::*;
 use tet_application::{Frame, PlayerView, Renderer};
-use tet_domain::{Cell, MinoType, Ruleset};
+use tet_domain::{MinoType, Ruleset};
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
+use crate::rendering::board;
 use crate::rendering::font::Fonts;
-use crate::rendering::layout::{PixelRect, plan_board};
+use crate::rendering::layout::PixelRect;
 use crate::rendering::piece_box::PieceBox;
 use crate::rendering::theme::{Palette, Theme};
 use crate::rendering::viewport::Viewport;
@@ -55,18 +56,6 @@ use crate::rendering::viewport::Viewport;
 /// Color for locked garbage cells and the board outline. Bright enough
 /// to be clearly visible on the black background.
 const STRUCTURE_COLOR: Color = Color::new(80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0);
-
-/// Base grid line color. Dim against the black background — the "background"
-/// brightness of the grid (visible in the middle of each cell edge).
-const GRID_BASE_COLOR: Color = Color::new(20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0);
-
-/// Brighter color (with alpha) for the "cross" segments at each grid
-/// intersection. Alpha < 1 lets the segments blend with the base line
-/// underneath, so the transition from dim to bright is gradual rather
-/// than a hard edge. Two perpendicular arms overlap at the corner, which
-/// gives an even brighter pixel there. The actual alpha is overridden
-/// per-layer (see the `layers` array in `render_board`).
-const GRID: Color = Color::new(60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0);
 
 /// Faint white for the ghost piece outline. Reduces alpha so the
 /// locked cells underneath remain visible.
@@ -133,11 +122,12 @@ fn draw_outline(rect: PixelRect, color: Color) {
 
 pub struct MacroquadRenderer {
     dpi_scale: f32,
-    fonts: Fonts,
+    canvas: MacroquadCanvas,
 }
 
 impl MacroquadRenderer {
-    /// Load fonts from the embedded bytes.
+    /// Load fonts from the embedded bytes and seed the canvas with
+    /// the default theme.
     ///
     /// # Panics
     ///
@@ -146,9 +136,10 @@ impl MacroquadRenderer {
     #[must_use]
     pub fn new() -> Self {
         let fonts = Fonts::load().expect("Fira Code fonts are embedded in the binary");
+        let canvas = MacroquadCanvas::new(Theme::DARK, fonts);
         Self {
             dpi_scale: screen_dpi_scale(),
-            fonts,
+            canvas,
         }
     }
 }
@@ -161,24 +152,34 @@ impl Default for MacroquadRenderer {
 
 impl Renderer for MacroquadRenderer {
     fn render(&mut self, frame: &Frame) {
-        clear_background(BLACK);
+        // Clear once per frame so background color matches the theme.
+        self.canvas.clear(PaletteKey::Background);
         for view in &frame.views {
-            render_view(view, &frame.ruleset, self.dpi_scale, &self.fonts);
+            render_view(view, &frame.ruleset, self.dpi_scale, &mut self.canvas);
         }
     }
 }
 
 /// Build a [`Viewport`] from a `PlayerView` and dispatch to per-feature
-/// renderers. The dispatch order matters: outline + grid behind locked
-/// cells, hold/queue around the board, HUD on top.
-fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
+/// renderers.
+///
+/// The board now flows through the [`crate::rendering::board`] module
+/// via the [`Canvas`] trait (Phase 11). Other features still use the
+/// legacy direct-`draw_*` helpers and will migrate to `Canvas` in
+/// Phases 12–14.
+fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut MacroquadCanvas) {
     let vp = Viewport::new(&view.snapshot, &view.layout, ruleset, dpi);
+    // Copy the theme so we can hand `&mut *canvas` to the draw call;
+    // `Theme: Copy` makes the duplication free.
+    let theme = *canvas.theme();
 
-    render_board(view, &vp);
+    board::draw(&vp, &theme, &mut *canvas);
+
     render_active_piece(&vp);
     if let Some(ghost) = view.ghost {
         render_ghost(&vp, ghost);
     }
+    let fonts = canvas.fonts();
     if vp.layout().show_hold {
         render_hold(&vp, fonts);
     }
@@ -187,138 +188,6 @@ fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, fonts: &Fonts) {
     }
     render_stats(&vp, fonts);
     render_label(view, &vp, fonts);
-}
-
-fn render_board(view: &PlayerView, vp: &Viewport) {
-    let plan = plan_board(view, vp.ruleset(), vp.dpi());
-
-    // Draw order matters:
-    //   1. Faint grid lines (cover the full board, including the rect edges)
-    //   2. Brighter "cross" segments at each grid intersection
-    //   3. Locked cells
-    //   4. Outer outline LAST (overwrites the faint grid color at the
-    //      rect edges with the brighter STRUCTURE_COLOR).
-    let draw_h = matches!(
-        vp.layout().grid_style,
-        tet_application::GridStyle::Horizontal | tet_application::GridStyle::Full
-    );
-    let draw_v = matches!(
-        vp.layout().grid_style,
-        tet_application::GridStyle::Vertical | tet_application::GridStyle::Full
-    );
-
-    // Pass 1: faint base lines spanning the whole board.
-    if draw_h {
-        for &row_phys in &plan.h_line_rows {
-            draw_h_line(
-                plan.outer.x,
-                row_phys,
-                plan.grid_line_length_phys,
-                GRID_BASE_COLOR,
-            );
-        }
-    }
-    if draw_v {
-        for &col_phys in &plan.v_line_cols {
-            draw_v_line(col_phys, plan.outer.y, plan.outer.h, GRID_BASE_COLOR);
-        }
-    }
-
-    // Pass 2: brighter "cross" segments at each grid intersection.
-    //
-    // To create a visible fade from the dim base line to a brighter
-    // corner, we draw multiple overlapping layers per arm. Layers are
-    // painted outermost-first (faint, long) so each inner layer
-    // (closer to the corner, higher alpha) overwrites the area it
-    // covers with a brighter pixel. The result is a gradient:
-    // brightest at the corner pixel, fading smoothly outward.
-    //
-    // At rect-edge corners each arm is clipped to the rect bounds so
-    // it never extends past the border.
-    if draw_h && draw_v {
-        let cell_phys = vp.cell_px_phys();
-        let x_lo = plan.outer.x;
-        let x_hi = plan.outer.right_pixel() + 1; // exclusive
-        let y_lo = plan.outer.y;
-        let y_hi = plan.outer.bottom_pixel() + 1; // exclusive
-        // Each entry: (reach_in_phys, fading_alpha). Outermost first.
-        // The innermost (shortest reach, highest alpha) wins at the corner.
-        let layers: &[(i32, f32)] = &[
-            (cell_phys / 3, 0.20),
-            (cell_phys / 6, 0.40),
-            (cell_phys / 12, 0.65),
-            (cell_phys / 24, 0.95),
-        ];
-
-        for &y_phys in &plan.h_line_rows {
-            for &x_phys in &plan.v_line_cols {
-                // Horizontal arm
-                for &(reach, alpha) in layers {
-                    let h_start = (x_phys - reach).max(x_lo);
-                    let h_end = (x_phys + reach).min(x_hi);
-                    if h_end > h_start {
-                        let c = Color {
-                            r: GRID.r,
-                            g: GRID.g,
-                            b: GRID.b,
-                            a: alpha,
-                        };
-                        draw_h_line(h_start, y_phys, h_end - h_start, c);
-                    }
-                }
-                // Vertical arm
-                for &(reach, alpha) in layers {
-                    let v_start = (y_phys - reach).max(y_lo);
-                    let v_end = (y_phys + reach).min(y_hi);
-                    if v_end > v_start {
-                        let c = Color {
-                            r: GRID.r,
-                            g: GRID.g,
-                            b: GRID.b,
-                            a: alpha,
-                        };
-                        draw_v_line(x_phys, v_start, v_end - v_start, c);
-                    }
-                }
-            }
-        }
-    }
-
-    // Pass 3: locked cells. `Board::rows()` yields bottom-to-top;
-    // `Viewport::cell_pixel` flips the Y axis. Skip buffer rows above
-    // the visible window (`num_visible_rows`).
-    let cw = vp.cell_px_phys();
-    let visible_rows = vp.ruleset().num_visible_rows;
-    for (row, board_row) in vp.snapshot().board.rows().enumerate().take(visible_rows) {
-        for (col, cell) in board_row.iter().enumerate() {
-            let (x_phys, y_phys) = vp.cell_pixel(col as i32, row as i32);
-            match cell {
-                Cell::Empty => {}
-                Cell::Block(t) => {
-                    draw_rectangle(
-                        x_phys as f32,
-                        y_phys as f32,
-                        cw as f32,
-                        cw as f32,
-                        piece_color(*t),
-                    );
-                }
-                Cell::Garbage => {
-                    draw_rectangle(
-                        x_phys as f32,
-                        y_phys as f32,
-                        cw as f32,
-                        cw as f32,
-                        STRUCTURE_COLOR,
-                    );
-                }
-            }
-        }
-    }
-
-    // Pass 4: outer outline, drawn last so the border overwrites the
-    // faint grid line color at the rect edges with the brighter color.
-    draw_outline(plan.outer, STRUCTURE_COLOR);
 }
 
 fn render_active_piece(vp: &Viewport) {
@@ -584,6 +453,22 @@ impl MacroquadCanvas {
             FontWeight::Regular => &self.fonts.regular,
             FontWeight::SemiBold => &self.fonts.semibold,
         }
+    }
+
+    /// Borrow the stored [`Theme`]. Module-level draws that need the
+    /// theme separately (`board::draw`, `piece::draw`, etc.) get it
+    /// through this accessor while the canvas-mutating calls happen
+    /// through [`Canvas`] trait methods.
+    #[must_use]
+    pub const fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Borrow the stored [`Fonts`]. Side panels and HUD modules
+    /// need the actual `Font` handles for `Canvas::text` calls.
+    #[must_use]
+    pub const fn fonts(&self) -> &Fonts {
+        &self.fonts
     }
 }
 
