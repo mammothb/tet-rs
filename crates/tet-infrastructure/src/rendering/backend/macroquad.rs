@@ -49,6 +49,7 @@ use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
 use crate::rendering::board;
 use crate::rendering::font::Fonts;
 use crate::rendering::layout::PixelRect;
+use crate::rendering::piece;
 use crate::rendering::piece_box::PieceBox;
 use crate::rendering::theme::{Palette, Theme};
 use crate::rendering::viewport::Viewport;
@@ -56,10 +57,6 @@ use crate::rendering::viewport::Viewport;
 /// Color for locked garbage cells and the board outline. Bright enough
 /// to be clearly visible on the black background.
 const STRUCTURE_COLOR: Color = Color::new(80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0);
-
-/// Faint white for the ghost piece outline. Reduces alpha so the
-/// locked cells underneath remain visible.
-const GHOST_COLOR: Color = Color::new(1.0, 1.0, 1.0, 0.25);
 
 /// White text for HUD elements.
 const TEXT_COLOR: Color = WHITE;
@@ -174,11 +171,8 @@ fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut Macr
     let theme = *canvas.theme();
 
     board::draw(&vp, &theme, &mut *canvas);
+    piece::draw(&vp, &theme, view.ghost, &mut *canvas);
 
-    render_active_piece(&vp);
-    if let Some(ghost) = view.ghost {
-        render_ghost(&vp, ghost);
-    }
     let fonts = canvas.fonts();
     if vp.layout().show_hold {
         render_hold(&vp, fonts);
@@ -188,48 +182,6 @@ fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut Macr
     }
     render_stats(&vp, fonts);
     render_label(view, &vp, fonts);
-}
-
-fn render_active_piece(vp: &Viewport) {
-    let color = piece_color(vp.snapshot().current.kind);
-    let cw = vp.cell_px_phys();
-    let visible_rows = vp.ruleset().num_visible_rows as i32;
-
-    for cell_pos in vp.snapshot().current.cells() {
-        let col = i32::from(cell_pos.x);
-        let domain_row = i32::from(cell_pos.y);
-        if domain_row < 0 || domain_row >= visible_rows {
-            continue;
-        }
-        let (x_phys, y_phys) = vp.cell_pixel(col, domain_row);
-        draw_rectangle(x_phys as f32, y_phys as f32, cw as f32, cw as f32, color);
-    }
-}
-
-fn render_ghost(vp: &Viewport, ghost: tet_domain::Vec2) {
-    let color = piece_color(vp.snapshot().current.kind);
-    let cur_pos = vp.snapshot().current.pos;
-    let pos_offset_x = i32::from(ghost.x) - i32::from(cur_pos.x);
-    let pos_offset_y = i32::from(ghost.y) - i32::from(cur_pos.y);
-    let visible_rows = vp.ruleset().num_visible_rows as i32;
-    let cw = vp.cell_px_phys();
-
-    for cell_offset in vp.snapshot().current.cells() {
-        let cell_col = i32::from(cell_offset.x) + pos_offset_x;
-        let cell_domain_row = i32::from(cell_offset.y) + pos_offset_y;
-        if cell_domain_row < 0 || cell_domain_row >= visible_rows {
-            continue;
-        }
-        let (x_phys, y_phys) = vp.cell_pixel(cell_col, cell_domain_row);
-        draw_rectangle(
-            x_phys as f32,
-            y_phys as f32,
-            cw as f32,
-            cw as f32,
-            GHOST_COLOR,
-        );
-        draw_outline(PixelRect::new(x_phys, y_phys, cw, cw), color);
-    }
 }
 
 fn render_hold(vp: &Viewport, fonts: &Fonts) {
