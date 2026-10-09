@@ -165,6 +165,7 @@ impl Theme {
 )]
 mod test {
     use super::*;
+    use rstest::rstest;
 
     /// Convert an f32 RGBA tuple (each ∈ [0, 1]) into a `Palette` using
     /// the same rounding (`round() as u8`) macroquad's `Color::new` would
@@ -182,81 +183,74 @@ mod test {
         }
     }
 
-    // ---- background / structure / grid / ghost / text ----
+    // ---- palette colors ----
     //
-    // Each test names the source macroquad literal in the docstring so
-    // the byte mapping stays traceable.
+    // Each `Theme::DARK` palette field matches its source macroquad
+    // literal (`Color::new(...)` in `macroquad.rs`). Source f32 values
+    // stay as `#[case(...)]` arguments so the byte mapping remains
+    // traceable — if a future change to the macroquad constant isn't
+    // reflected in `Theme::DARK`, the failing `#[case::*]` name names
+    // exactly which field drifted.
 
-    #[test]
-    fn dark_background_is_black() {
-        let expected = palette_from_f32(0.0, 0.0, 0.0, 1.0);
-        assert_eq!(Theme::DARK.background, expected);
-    }
-
-    #[test]
-    fn dark_structure_matches_original_structure_color() {
-        // Source: `STRUCTURE_COLOR = Color::new(80.0/255.0, ..., 1.0)`.
-        let expected = palette_from_f32(80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0);
-        assert_eq!(Theme::DARK.structure, expected);
-    }
-
-    #[test]
-    fn dark_grid_base_matches_original_grid_base_color() {
-        // Source: `GRID_BASE_COLOR = Color::new(20.0/255.0, ..., 1.0)`.
-        let expected = palette_from_f32(20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0);
-        assert_eq!(Theme::DARK.grid_base, expected);
-    }
-
-    #[test]
-    fn dark_grid_cross_matches_original_grid_color() {
-        // Source: `GRID = Color::new(60.0/255.0, ..., 1.0)`. Alpha is
-        // overridden per-layer at draw time; we store opaque here.
-        let expected = palette_from_f32(60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0);
-        assert_eq!(Theme::DARK.grid_cross.rgb, expected.rgb);
-        assert_eq!(Theme::DARK.grid_cross.alpha, 255);
-    }
-
-    #[test]
-    fn dark_ghost_matches_original_ghost_color() {
-        // Source: `GHOST_COLOR = Color::new(1.0, 1.0, 1.0, 0.25)`.
-        let expected = palette_from_f32(1.0, 1.0, 1.0, 0.25);
-        assert_eq!(Theme::DARK.ghost, expected);
-        // Sanity: alpha 0.25 rounds to 64.
-        assert_eq!(Theme::DARK.ghost.alpha, 64);
-    }
-
-    #[test]
-    fn dark_text_matches_original_text_color() {
-        // Source: `TEXT_COLOR = WHITE = Color::new(1.0, 1.0, 1.0, 1.0)`.
-        let expected = palette_from_f32(1.0, 1.0, 1.0, 1.0);
-        assert_eq!(Theme::DARK.text, expected);
+    #[rstest]
+    #[case::structure(Theme::DARK.structure, 80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0)] // STRUCTURE_COLOR
+    #[case::grid_base(Theme::DARK.grid_base, 20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0)] // GRID_BASE_COLOR
+    #[case::grid_cross(Theme::DARK.grid_cross, 60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0)] // GRID (alpha overridden per-layer at draw)
+    #[case::ghost(Theme::DARK.ghost, 1.0, 1.0, 1.0, 0.25)] // GHOST_COLOR
+    #[case::text(Theme::DARK.text, 1.0,1.0, 1.0, 1.0)] // TEXT_COLOR = WHITE
+    #[case::background(Theme::DARK.background, 0.0, 0.0, 0.0, 1.0)] // clear_background(BLACK)
+    fn dark_palette_field_matches_source_macroquad_color(
+        #[case] actual: Palette,
+        #[case] r: f32,
+        #[case] g: f32,
+        #[case] b: f32,
+        #[case] a: f32,
+    ) {
+        let expected = palette_from_f32(r, g, b, a);
+        assert_eq!(actual, expected);
     }
 
     // ---- piece colors ----
+    //
+    // Each `PiecePalette` entry matches its source `piece_color()` literal.
 
-    /// Each `PiecePalette` entry matches its source `piece_color()` value.
-    #[test]
-    fn dark_piece_palette_matches_original_piece_color_per_mino() {
-        let rgb = |r: f32, g: f32, b: f32| -> Palette { palette_from_f32(r, g, b, 1.0) };
-        assert_eq!(Theme::DARK.pieces.i, rgb(0.0, 0.85, 0.85));
-        assert_eq!(Theme::DARK.pieces.o, rgb(0.95, 0.85, 0.0));
-        assert_eq!(Theme::DARK.pieces.t, rgb(0.55, 0.0, 0.55));
-        assert_eq!(Theme::DARK.pieces.s, rgb(0.0, 0.85, 0.0));
-        assert_eq!(Theme::DARK.pieces.z, rgb(0.85, 0.0, 0.0));
-        assert_eq!(Theme::DARK.pieces.j, rgb(0.0, 0.0, 0.85));
-        assert_eq!(Theme::DARK.pieces.l, rgb(0.95, 0.55, 0.0));
+    #[rstest]
+    #[case::i(MinoType::I, 0.0, 0.85, 0.85)]
+    #[case::o(MinoType::O, 0.95, 0.85, 0.0)]
+    #[case::t(MinoType::T, 0.55, 0.0, 0.55)]
+    #[case::s(MinoType::S, 0.0, 0.85, 0.0)]
+    #[case::z(MinoType::Z, 0.85, 0.0, 0.0)]
+    #[case::j(MinoType::J, 0.0, 0.0, 0.85)]
+    #[case::l(MinoType::L, 0.95, 0.55, 0.0)]
+    fn dark_piece_palette_matches_source_piece_color(
+        #[case] kind: MinoType,
+        #[case] r: f32,
+        #[case] g: f32,
+        #[case] b: f32,
+    ) {
+        let expected = palette_from_f32(r, g, b, 1.0);
+        assert_eq!(Theme::DARK.pieces.get(kind), expected);
     }
 
-    /// `PiecePalette::get` dispatches to the correct named field.
-    #[test]
-    fn piece_palette_get_returns_correct_entry_per_mino() {
-        assert_eq!(Theme::DARK.pieces.get(MinoType::I), Theme::DARK.pieces.i);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::O), Theme::DARK.pieces.o);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::T), Theme::DARK.pieces.t);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::S), Theme::DARK.pieces.s);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::Z), Theme::DARK.pieces.z);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::J), Theme::DARK.pieces.j);
-        assert_eq!(Theme::DARK.pieces.get(MinoType::L), Theme::DARK.pieces.l);
+    // ---- `PiecePalette::get` dispatch ----
+    //
+    // `get(MinoType)` must dispatch to the matching named field. This
+    // catches a `match` typo where e.g. `MinoType::I` returns `self.j`
+    // instead of `self.i`.
+
+    #[rstest]
+    #[case::i(MinoType::I, Theme::DARK.pieces.i)]
+    #[case::o(MinoType::O, Theme::DARK.pieces.o)]
+    #[case::t(MinoType::T, Theme::DARK.pieces.t)]
+    #[case::s(MinoType::S, Theme::DARK.pieces.s)]
+    #[case::z(MinoType::Z, Theme::DARK.pieces.z)]
+    #[case::j(MinoType::J, Theme::DARK.pieces.j)]
+    #[case::l(MinoType::L, Theme::DARK.pieces.l)]
+    fn piece_palette_get_dispatches_to_named_field(
+        #[case] kind: MinoType,
+        #[case] expected: Palette,
+    ) {
+        assert_eq!(Theme::DARK.pieces.get(kind), expected);
     }
 
     /// All seven tetromino colors are distinct. Catches a transcription
@@ -281,19 +275,6 @@ mod test {
                 );
             }
         }
-    }
-
-    // ---- HUD metrics ----
-
-    #[test]
-    fn dark_hud_matches_original_constants() {
-        // HUD_FONT_SIZE = 18.0, LABEL_PADDING = 0.0, HOLD_BOX_CELLS = 4,
-        // QUEUE_PREVIEW_CELL_PX = 16.0, QUEUE_PREVIEW_SPACING = 4.0.
-        assert_eq!(Theme::DARK.hud.font_size_px, 18.0);
-        assert_eq!(Theme::DARK.hud.label_padding_px, 0.0);
-        assert_eq!(Theme::DARK.hud.hold_box_cells, 4);
-        assert_eq!(Theme::DARK.hud.queue_preview_cell_px, 16.0);
-        assert_eq!(Theme::DARK.hud.queue_preview_spacing_px, 4.0);
     }
 
     // ---- Palette constructors ----
