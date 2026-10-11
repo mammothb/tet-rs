@@ -108,11 +108,6 @@ impl Renderer for MacroquadRenderer {
 
 /// Build a [`Viewport`] from a `PlayerView` and dispatch to per-feature
 /// renderers.
-///
-/// The board now flows through the [`crate::rendering::board`] module
-/// via the [`Canvas`] trait (Phase 11). Other features still use the
-/// legacy direct-`draw_*` helpers and will migrate to `Canvas` in
-/// Phases 12–14.
 fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut MacroquadCanvas) {
     let vp = Viewport::new(&view.snapshot, &view.layout, ruleset, dpi);
     // Copy the theme so we can hand `&mut *canvas` to the draw call;

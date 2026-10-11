@@ -24,9 +24,6 @@ use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
 
 /// Render whichever side panels are enabled for this view.
-///
-/// **Stub** — Phase 13 wires `hold::draw` and `queue::draw` behind
-/// `show_hold` / `show_queue` feature flags.
 pub fn draw(vp: &Viewport, theme: &Theme, canvas: &mut dyn Canvas) {
     if vp.layout().show_hold {
         hold::draw(vp, theme, canvas);
