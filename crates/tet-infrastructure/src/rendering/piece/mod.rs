@@ -76,6 +76,8 @@ mod test {
             cell_px: 24.0,
             show_queue: false,
             show_hold: false,
+            show_stats: false,
+            show_label: false,
             grid_style: GridStyle::None,
         };
         (snapshot, layout, ruleset)

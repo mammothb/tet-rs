@@ -46,28 +46,13 @@ use tet_application::{Frame, PlayerView, Renderer};
 use tet_domain::Ruleset;
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
-use crate::rendering::board;
 use crate::rendering::font::Fonts;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::piece;
 use crate::rendering::side_panel;
 use crate::rendering::theme::{Palette, Theme};
 use crate::rendering::viewport::Viewport;
-
-/// White text for HUD elements.
-const TEXT_COLOR: Color = WHITE;
-
-const HUD_FONT_SIZE: f32 = 18.0;
-const QUEUE_PREVIEW_SPACING: f32 = 4.0;
-/// Vertical offset from the nearest edge for labels (HOLD, NEXT, stats,
-/// player name). The text baseline sits at this offset above the edge,
-/// so the text ascends into the available space above.
-///
-/// **Must stay small** — the cap height at font size 18 extends ~14px
-/// above the baseline. The window title bar clips the top of the canvas;
-/// at `LABEL_PADDING = 8` the cap height went above the title bar and
-/// got cut off. `0.0` keeps it below.
-const LABEL_PADDING: f32 = 0.0;
+use crate::rendering::{board, hud};
 
 /// Draw a 1-pixel-tall horizontal line as a filled rectangle covering
 /// pixel row `y_phys` from column `x_phys` to `x_phys + width_phys - 1`.
@@ -79,27 +64,6 @@ fn draw_h_line(x_phys: i32, y_phys: i32, width_phys: i32, color: Color) {
 /// pixel column `x_phys` from row `y_phys` to `y_phys + height_phys - 1`.
 fn draw_v_line(x_phys: i32, y_phys: i32, height_phys: i32, color: Color) {
     draw_rectangle(x_phys as f32, y_phys as f32, 1.0, height_phys as f32, color);
-}
-
-/// Draw text at the given logical position with the given font. Wraps
-/// `draw_text_ex` so the call sites don't need to construct
-/// `TextParams`. Positions are in **logical pixels** — the existing
-/// render label code paths pass logical-pixel floats and macroquad
-/// accepts that scale; we preserve that here.
-fn draw_label(text: &str, x: f32, y: f32, font_size: u16, font: &Font, color: Color) {
-    draw_text_ex(
-        text,
-        x,
-        y,
-        TextParams {
-            font: Some(font),
-            font_size,
-            font_scale: 1.0,
-            font_scale_aspect: 1.0,
-            color,
-            rotation: 0.0,
-        },
-    );
 }
 
 pub struct MacroquadRenderer {
@@ -158,59 +122,7 @@ fn render_view(view: &PlayerView, ruleset: &Ruleset, dpi: f32, canvas: &mut Macr
     board::draw(&vp, &theme, &mut *canvas);
     piece::draw(&vp, &theme, view.ghost, &mut *canvas);
     side_panel::draw(&vp, &theme, &mut *canvas);
-
-    let fonts = canvas.fonts();
-    render_stats(&vp, fonts);
-    render_label(view, &vp, fonts);
-}
-
-fn render_stats(vp: &Viewport, fonts: &Fonts) {
-    let layout = vp.layout();
-    let ruleset = vp.ruleset();
-    let (ox, oy) = (layout.origin.0, layout.origin.1);
-    // Logical f32 throughout — stats text uses the same pre-DPI
-    // convention as `draw_label` (see `render_hold`).
-    let stats_y =
-        oy + layout.cell_px * ruleset.num_visible_rows as f32 + HUD_FONT_SIZE + LABEL_PADDING;
-    let mut line: i32 = 0;
-    let mut text = |s: &str| {
-        let y_offset = (line) as f32 * HUD_FONT_SIZE;
-        draw_label(
-            s,
-            ox,
-            stats_y + y_offset,
-            HUD_FONT_SIZE as u16,
-            &fonts.regular,
-            TEXT_COLOR,
-        );
-        line += 1;
-    };
-    text(&format!("combo: {}", vp.snapshot().combo));
-    text(&format!("b2b: {}", vp.snapshot().b2b));
-}
-
-/// `PlayerView::label` lives on `PlayerView`, not `PlayerSnapshot` —
-/// not surfaced via the `Viewport` since it isn't a render-layout
-/// concern. The `view` parameter here is just for that one accessor.
-fn render_label(view: &PlayerView, vp: &Viewport, fonts: &Fonts) {
-    if view.label.is_empty() {
-        return;
-    }
-    let layout = view.layout;
-    let ruleset = vp.ruleset();
-    let ox = layout.origin.0;
-    let oy = layout.origin.1;
-    let queue_x = ox + layout.cell_px * ruleset.num_cols as f32 + QUEUE_PREVIEW_SPACING;
-    // Logical f32 — matches existing label-rendering convention.
-    let label_y = oy + layout.cell_px * ruleset.num_visible_rows as f32 - LABEL_PADDING;
-    draw_label(
-        view.label,
-        queue_x,
-        label_y,
-        HUD_FONT_SIZE as u16,
-        &fonts.semibold,
-        TEXT_COLOR,
-    );
+    hud::draw(&vp, &theme, view.label, &mut *canvas);
 }
 
 // ---- `Canvas` impl for macroquad ----

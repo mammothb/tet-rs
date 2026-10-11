@@ -62,11 +62,12 @@ pub(crate) fn for_each_piece_cell<F>(
 #[allow(clippy::similar_names)]
 mod test {
     use super::*;
-    use crate::rendering::backend::canvas::PaletteKey;
-    use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
-    use rstest::rstest;
+
     use tet_application::{GridStyle, Layout, Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
+
+    use crate::rendering::backend::canvas::PaletteKey;
+    use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
 
     fn test_setup() -> (PlayerSnapshot, Layout, Ruleset) {
         let ruleset = Ruleset::guideline();
@@ -91,6 +92,8 @@ mod test {
             cell_px: 24.0,
             show_queue: true,
             show_hold: true,
+            show_stats: false,
+            show_label: false,
             grid_style: GridStyle::None,
         };
         (snapshot, layout, ruleset)
@@ -106,7 +109,7 @@ mod test {
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
         let mut canvas = RecordingCanvas::default();
 
-        super::draw(&vp, &Theme::DARK, &mut canvas);
+        draw(&vp, &Theme::DARK, &mut canvas);
 
         assert!(
             canvas.calls.is_empty(),
@@ -123,7 +126,7 @@ mod test {
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
         let mut canvas = RecordingCanvas::default();
 
-        super::draw(&vp, &Theme::DARK, &mut canvas);
+        draw(&vp, &Theme::DARK, &mut canvas);
 
         let stroke_count = canvas
             .calls
@@ -142,7 +145,7 @@ mod test {
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
         let mut canvas = RecordingCanvas::default();
 
-        super::draw(&vp, &Theme::DARK, &mut canvas);
+        draw(&vp, &Theme::DARK, &mut canvas);
 
         let stroke_count = canvas
             .calls
@@ -154,7 +157,7 @@ mod test {
 
     // ---- hold geometry ----
 
-    #[rstest]
+    #[test]
     fn hold_box_outline_is_left_of_board_origin() {
         let (snapshot, layout, ruleset) = test_setup();
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
@@ -178,7 +181,7 @@ mod test {
 
     // ---- queue geometry ----
 
-    #[rstest]
+    #[test]
     fn queue_outlines_stack_vertically_right_of_board() {
         let (mut snapshot, layout, ruleset) = test_setup();
         snapshot.queue = vec![MinoType::T, MinoType::S, MinoType::Z];
@@ -218,7 +221,7 @@ mod test {
     // `box_cells - 1 - local_y` = `4 - 1 - 2` = 1 →
     // rect.y = hold_y_phys + screen_row * cw = 16 + 24 = 40.
 
-    #[rstest]
+    #[test]
     fn hold_piece_cells_use_hold_box_origin_and_cell_size() {
         let (mut snapshot, layout, ruleset) = test_setup();
         snapshot.hold = Some(MinoType::I);
