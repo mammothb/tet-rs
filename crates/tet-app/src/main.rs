@@ -7,7 +7,7 @@ use macroquad::prelude::*;
 use tet_application::{
     Frame, GameSession, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
 };
-use tet_domain::{Rng, Ruleset, Vec2};
+use tet_domain::{Ruleset, Vec2};
 use tet_infrastructure::{MacroquadRenderer, SmallRng};
 use tokio::sync::oneshot;
 
@@ -32,7 +32,7 @@ fn collect_input_state() -> InputState {
 ///
 /// Single-player for now: one view, positioned at (16, 16) with the
 /// standard guideline layout. Multi-player is a separate concern.
-fn assemble_frame<R: Rng>(session: &GameSession<R>, human_idx: usize) -> Frame {
+fn assemble_frame(session: &GameSession, human_idx: usize) -> Frame {
     let mut views = Vec::with_capacity(session.players.len());
     let base_layout = Layout::default();
     // Origin starts AFTER the hold box on the left, so the hold box fits
@@ -98,10 +98,11 @@ async fn main() {
         .expect("build tokio runtime");
 
     let ruleset = Ruleset::guideline();
-    let mut session = GameSession::<SmallRng>::new(ruleset);
+    let mut session = GameSession::new(ruleset);
     let (_, queue_rng) = SmallRng::new(None);
     let (_, attack_rng) = SmallRng::new(None);
-    let human_idx = session.add_player(Player::new_human(Box::new(queue_rng), attack_rng));
+    let human_idx =
+        session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
     let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();

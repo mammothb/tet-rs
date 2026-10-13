@@ -1,4 +1,4 @@
-use tet_domain::{Cell, MinoType, Orientation, Rng, Rotation, Ruleset, Vec2, v2};
+use tet_domain::{Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
 use crate::{Phase, Piece, Player};
 
@@ -19,13 +19,14 @@ pub struct TickResult {
 
 /// True if shifting the active piece down by 1 cell wouldn't collide with the
 /// board. Does not mutate the piece.
-pub fn piece_can_fall<R: Rng>(player: &Player<R>) -> bool {
+#[must_use]
+pub fn piece_can_fall(player: &Player) -> bool {
     let mut shifted = player.current;
     shifted.shift(v2![0, -1]);
     !player.board.collides(&shifted.cells().collect::<Vec<_>>())
 }
 
-pub fn step_gravity<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn step_gravity(player: &mut Player) -> bool {
     if !piece_can_fall(player) {
         return false;
     }
@@ -33,7 +34,7 @@ pub fn step_gravity<R: Rng>(player: &mut Player<R>) -> bool {
     true
 }
 
-pub fn apply_horizontal_input<R: Rng>(player: &mut Player<R>, dx: i8) -> bool {
+pub fn apply_horizontal_input(player: &mut Player, dx: i8) -> bool {
     let original = player.current.pos;
     player.current.shift(v2![dx, 0]);
     if player
@@ -51,11 +52,7 @@ pub fn apply_horizontal_input<R: Rng>(player: &mut Player<R>, dx: i8) -> bool {
     }
 }
 
-pub fn apply_rotation_input<R: Rng>(
-    player: &mut Player<R>,
-    ruleset: &Ruleset,
-    rot: Rotation,
-) -> bool {
+pub fn apply_rotation_input(player: &mut Player, ruleset: &Ruleset, rot: Rotation) -> bool {
     let new_orient = player.current.orientation.rotate(rot);
     let kicks = ruleset.kicks(player.current.kind, new_orient, rot);
 
@@ -82,7 +79,7 @@ pub fn apply_rotation_input<R: Rng>(
 /// # Panics
 ///
 /// Number of full rows exceed u8 limit
-pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
+pub fn try_lock(player: &mut Player) -> TickResult {
     let tspin = detect_tspin(player);
     for cell in player.current.cells() {
         player.board.set(cell, Cell::Block(player.current.kind));
@@ -98,7 +95,7 @@ pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
     }
 }
 
-pub fn post_lock<R: Rng>(player: &mut Player<R>, result: &TickResult, ruleset: &Ruleset) {
+pub fn post_lock(player: &mut Player, result: &TickResult, ruleset: &Ruleset) {
     cancel_pending_garbage(player, result.lines_cleared);
     update_score(player, result, ruleset);
     spawn_next_piece(player);
@@ -107,7 +104,7 @@ pub fn post_lock<R: Rng>(player: &mut Player<R>, result: &TickResult, ruleset: &
     }
 }
 
-pub fn cancel_pending_garbage<R: Rng>(player: &mut Player<R>, mut to_cancel: u8) {
+pub fn cancel_pending_garbage(player: &mut Player, mut to_cancel: u8) {
     while to_cancel > 0 {
         let Some(top) = player.pending_garbage.last_mut() else {
             break;
@@ -122,7 +119,7 @@ pub fn cancel_pending_garbage<R: Rng>(player: &mut Player<R>, mut to_cancel: u8)
     }
 }
 
-pub fn spawn_next_piece<R: Rng>(player: &mut Player<R>) {
+pub fn spawn_next_piece(player: &mut Player) {
     let kind = player.queue.take();
     player.current = Piece::spawn(kind);
     player.hold_used = false;
@@ -134,7 +131,8 @@ pub fn spawn_next_piece<R: Rng>(player: &mut Player<R>) {
     }
 }
 
-pub fn project_ghost<R: Rng>(player: &Player<R>) -> Vec2 {
+#[must_use]
+pub fn project_ghost(player: &Player) -> Vec2 {
     let mut ghost = player.current;
     loop {
         let original = ghost.pos;
@@ -146,22 +144,23 @@ pub fn project_ghost<R: Rng>(player: &Player<R>) -> Vec2 {
     }
 }
 
-pub fn check_topout<R: Rng>(player: &Player<R>) -> bool {
+#[must_use]
+pub fn check_topout(player: &Player) -> bool {
     player
         .board
         .collides(&player.current.cells().collect::<Vec<_>>())
 }
 
-pub fn hard_drop<R: Rng>(player: &mut Player<R>) -> TickResult {
+pub fn hard_drop(player: &mut Player) -> TickResult {
     player.current.pos = project_ghost(player);
     try_lock(player)
 }
 
-pub fn soft_drop<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn soft_drop(player: &mut Player) -> bool {
     step_gravity(player)
 }
 
-pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn try_hold(player: &mut Player) -> bool {
     if player.hold_used {
         return false;
     }
@@ -190,7 +189,7 @@ pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
     true
 }
 
-fn detect_tspin<R: Rng>(player: &Player<R>) -> TSpinStatus {
+fn detect_tspin(player: &Player) -> TSpinStatus {
     if player.current.kind != MinoType::T {
         return TSpinStatus::None;
     }
@@ -224,7 +223,7 @@ fn detect_tspin<R: Rng>(player: &Player<R>) -> TSpinStatus {
     }
 }
 
-fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &Ruleset) {
+fn update_score(player: &mut Player, result: &TickResult, _ruleset: &Ruleset) {
     let lines = result.lines_cleared;
 
     if lines == 0 {
@@ -279,7 +278,7 @@ mod test {
 
     use rstest::rstest;
 
-    use tet_domain::{Board, Queue};
+    use tet_domain::{Board, Queue, Rng};
 
     use crate::player::{Controller, PendingGarbage, Player};
     use crate::ports::bot::{BotError, BotMove, BotTransport};
@@ -315,7 +314,7 @@ mod test {
     /// here (not from the queue) because tests that use this fixture want
     /// a guaranteed T-piece setup. `last_gravity_at` is set to "now" so
     /// gravity doesn't fire on the first `step_player` call.
-    fn t_player() -> Player<StubRng> {
+    fn t_player() -> Player {
         Player {
             board: Board::new(10, 25),
             current: Piece::spawn(MinoType::T),
@@ -330,7 +329,7 @@ mod test {
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(NoopBot)),
             pending_garbage: Vec::new(),
-            attack_rng: StubRng::counter(),
+            attack_rng: Box::new(StubRng::counter()),
             last_gravity_at: Instant::now(),
         }
     }
@@ -681,7 +680,7 @@ mod test {
 
     /// Corners are at pos + (0,0), pos+(2,0), pos+(0,2), pos+(2,2). Indices
     /// 0..3 map to bottom-left, bottom-right, top-left, top-right.
-    fn block_corners(p: &mut Player<StubRng>, indices: &[usize]) {
+    fn block_corners(p: &mut Player, indices: &[usize]) {
         let pos = p.current.pos;
         let offsets = [v2![0, 0], v2![2, 0], v2![0, 2], v2![2, 2]];
         for &i in indices {

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
+use tet_domain::{MinoType, Rotation, Ruleset, v2};
 
 use crate::tick;
 use crate::{
@@ -8,13 +8,13 @@ use crate::{
     PlayerSnapshot, TickResult,
 };
 
-pub struct GameSession<R: Rng> {
-    pub players: Vec<Player<R>>,
+pub struct GameSession {
+    pub players: Vec<Player>,
     pub ruleset: Ruleset,
     pub frame: u64,
 }
 
-impl<R: Rng> GameSession<R> {
+impl GameSession {
     #[must_use]
     pub fn new(ruleset: Ruleset) -> Self {
         Self {
@@ -25,7 +25,7 @@ impl<R: Rng> GameSession<R> {
     }
 
     /// Add a player. Returns the player index used for `apply_*` and `snapshot`.
-    pub fn add_player(&mut self, player: Player<R>) -> usize {
+    pub fn add_player(&mut self, player: Player) -> usize {
         self.players.push(player);
         self.players.len() - 1
     }
@@ -158,11 +158,7 @@ impl<R: Rng> GameSession<R> {
     }
 }
 
-pub fn apply_bot_move<R: Rng>(
-    player: &mut Player<R>,
-    mv: BotMove,
-    ruleset: &Ruleset,
-) -> Option<Piece> {
+pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
     // 1. Convert TBP true-rotation-center → bbox-anchor position.
     //    `MinoType::tbp_center_for` is a static lookup in the domain.
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
@@ -223,7 +219,7 @@ mod test {
     use std::time::Instant;
 
     use rstest::rstest;
-    use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
+    use tet_domain::{Board, Cell, MinoType, Orientation, Queue, Rng};
 
     use crate::PendingGarbage;
     use crate::TSpinStatus;
@@ -254,7 +250,7 @@ mod test {
         }
     }
 
-    impl<R: Rng> GameSession<R> {
+    impl GameSession {
         /// Drive a bot synchronously: take snapshot, ask transport for moves,
         /// apply first valid one. Test-only — doesn't exist in release builds.
         ///
@@ -340,7 +336,7 @@ mod test {
         }
     }
 
-    fn empty_player() -> Player<StubRng> {
+    fn empty_player() -> Player {
         Player {
             board: Board::new(10, 25),
             current: Piece::spawn(MinoType::T),
@@ -355,12 +351,12 @@ mod test {
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(StubBot::empty())),
             pending_garbage: Vec::new(),
-            attack_rng: StubRng::counter(),
+            attack_rng: Box::new(StubRng::counter()),
             last_gravity_at: Instant::now(),
         }
     }
 
-    fn t_session() -> GameSession<StubRng> {
+    fn t_session() -> GameSession {
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(empty_player());
         session
@@ -370,14 +366,14 @@ mod test {
 
     #[rstest]
     fn new_session_has_no_players_and_zero_frame() {
-        let session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        let session: GameSession = GameSession::new(Ruleset::guideline());
         assert_eq!(session.players.len(), 0);
         assert_eq!(session.frame, 0);
     }
 
     #[rstest]
     fn add_player_returns_sequential_indices() {
-        let mut session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        let mut session: GameSession = GameSession::new(Ruleset::guideline());
         assert_eq!(session.add_player(empty_player()), 0);
         assert_eq!(session.add_player(empty_player()), 1);
         assert_eq!(session.add_player(empty_player()), 2);
@@ -668,15 +664,15 @@ mod test {
     fn distribute_garbage_hole_uses_attacker_rng() {
         let mut p0 = empty_player();
         // Force attack_rng to return a specific value.
-        p0.attack_rng = StubRng {
+        p0.attack_rng = Box::new(StubRng {
             values: vec![42],
             idx: 0,
-        };
+        });
         let mut p1 = empty_player();
-        p1.attack_rng = StubRng {
+        p1.attack_rng = Box::new(StubRng {
             values: vec![7],
             idx: 0,
-        };
+        });
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(p0);
         session.add_player(p1);
