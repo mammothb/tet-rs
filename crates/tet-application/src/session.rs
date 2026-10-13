@@ -180,10 +180,7 @@ pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Op
     // 2. No rotation: just check the position.
     if target == curr_orient {
         player.current.pos = pos;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             return Some(player.current);
         }
         player.current.orientation = orig_orient;
@@ -206,10 +203,7 @@ pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Op
     for kick in kicks {
         player.current.orientation = target;
         player.current.pos = pos + *kick;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             return Some(player.current);
         }
     }

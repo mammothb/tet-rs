@@ -23,7 +23,7 @@ pub struct TickResult {
 pub fn piece_can_fall(player: &Player) -> bool {
     let mut shifted = player.current;
     shifted.shift(v2![0, -1]);
-    !player.board.collides(&shifted.cells().collect::<Vec<_>>())
+    !player.board.collides(&shifted.cells())
 }
 
 pub fn step_gravity(player: &mut Player) -> bool {
@@ -37,10 +37,7 @@ pub fn step_gravity(player: &mut Player) -> bool {
 pub fn apply_horizontal_input(player: &mut Player, dx: i8, now: GameTime) -> bool {
     let original = player.current.pos;
     player.current.shift(v2![dx, 0]);
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.current.pos = original;
         false
     } else {
@@ -66,10 +63,7 @@ pub fn apply_rotation_input(
     for kick in kicks {
         player.current.orientation = new_orient;
         player.current.pos = orig_pos + *kick;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             // Successful rotation — restart the lock timer if the piece is
             // still grounded (next `step_player` clears it if the piece lifted).
             player.lock_grounded_at = Some(now);
@@ -128,10 +122,7 @@ pub fn spawn_next_piece(player: &mut Player) {
     let kind = player.queue.take();
     player.current = Piece::spawn(kind);
     player.hold_used = false;
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.phase = Phase::GameOver;
     }
 }
@@ -142,7 +133,7 @@ pub fn project_ghost(player: &Player) -> Vec2 {
     loop {
         let original = ghost.pos;
         ghost.shift(v2![0, -1]);
-        if player.board.collides(&ghost.cells().collect::<Vec<_>>()) {
+        if player.board.collides(&ghost.cells()) {
             ghost.pos = original;
             return ghost.pos;
         }
@@ -151,9 +142,7 @@ pub fn project_ghost(player: &Player) -> Vec2 {
 
 #[must_use]
 pub fn check_topout(player: &Player) -> bool {
-    player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
+    player.board.collides(&player.current.cells())
 }
 
 pub fn hard_drop(player: &mut Player) -> TickResult {
@@ -185,10 +174,7 @@ pub fn try_hold(player: &mut Player) -> bool {
     // sets it if the new piece spawns grounded).
     player.lock_grounded_at = None;
     player.hold_used = true;
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.phase = Phase::GameOver;
     }
     true

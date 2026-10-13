@@ -75,11 +75,10 @@ fn ghost_position_from_snapshot(snapshot: &PlayerSnapshot) -> Vec2 {
     loop {
         let next_y = y - 1;
         let candidate = Vec2::new(pos.x, next_y);
-        let cells: Vec<Vec2> = snapshot
+        let cells = snapshot
             .current
             .cells()
-            .map(|c| Vec2::new(c.x, c.y + (next_y - pos.y)))
-            .collect();
+            .map(|c| Vec2::new(c.x, c.y + (next_y - pos.y)));
         if snapshot.board.collides(&cells) {
             return Vec2::new(pos.x, y);
         }
