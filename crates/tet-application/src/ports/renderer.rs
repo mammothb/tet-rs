@@ -38,6 +38,7 @@ pub enum GridStyle {
 ///
 /// Board dimensions (cols × rows) come from the `Frame`'s `Ruleset`, not
 /// from this struct — keeping the layout focused on pixel-level config.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy)]
 pub struct Layout {
     /// Top-left of the board in screen pixels.
@@ -48,6 +49,10 @@ pub struct Layout {
     pub show_queue: bool,
     /// Render the held piece.
     pub show_hold: bool,
+    /// Render the combo stats.
+    pub show_stats: bool,
+    /// Render the player/bot label.
+    pub show_label: bool,
     /// Render the board grid. Defaults to `Full` for thin horizontal
     /// + vertical lines on the empty board area.
     pub grid_style: GridStyle,
@@ -63,6 +68,8 @@ impl Layout {
             cell_px: 24.0,
             show_queue: true,
             show_hold: true,
+            show_stats: true,
+            show_label: true,
             grid_style: GridStyle::Full,
         }
     }

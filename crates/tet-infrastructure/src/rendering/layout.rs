@@ -40,7 +40,7 @@
     clippy::cast_precision_loss
 )]
 
-use tet_application::{Layout, PlayerView};
+use tet_application::Layout;
 use tet_domain::Ruleset;
 
 /// Integer-pixel rectangle. All four are physical pixel positions.
@@ -98,12 +98,6 @@ pub struct BoxLayout {
     pub rect: PixelRect,
 }
 
-/// Plan for a filled cell (locked piece on the board).
-#[derive(Clone, Copy, Debug)]
-pub struct FilledCell {
-    pub rect: PixelRect,
-}
-
 /// Plan a board's outline + grid lines for one view.
 ///
 /// All positions are integer physical pixels. `cell_px * dpi` is rounded
@@ -112,10 +106,10 @@ pub struct FilledCell {
 /// (NOT "where the last grid line lands"), so the outline and the grid
 /// line up by construction.
 #[must_use]
-pub fn plan_board(view: &PlayerView, ruleset: &Ruleset, dpi: f32) -> BoardLayout {
-    let cell_px_phys = (view.layout.cell_px * dpi).round() as i32;
-    let ox = (view.layout.origin.0 * dpi).round() as i32;
-    let oy = (view.layout.origin.1 * dpi).round() as i32;
+pub fn plan_board(layout: &Layout, ruleset: &Ruleset, dpi: f32) -> BoardLayout {
+    let cell_px_phys = (layout.cell_px * dpi).round() as i32;
+    let ox = (layout.origin.0 * dpi).round() as i32;
+    let oy = (layout.origin.1 * dpi).round() as i32;
     #[allow(clippy::cast_possible_truncation)] // num_cols ≤ 128 by invariant
     let cols = ruleset.num_cols as i32;
     #[allow(clippy::cast_possible_truncation)] // num_visible_rows ≤ 128 by invariant
@@ -157,31 +151,12 @@ pub fn plan_box(pos: (f32, f32), size_phys: i32, dpi: f32) -> BoxLayout {
     }
 }
 
-/// Plan a filled cell at `pos` with the given cell size in physical pixels.
-#[must_use]
-pub fn plan_filled_cell(pos: (f32, f32), size_phys: i32, dpi: f32) -> FilledCell {
-    let x = (pos.0 * dpi).round() as i32;
-    let y = (pos.1 * dpi).round() as i32;
-    FilledCell {
-        rect: PixelRect::new(x, y, size_phys, size_phys),
-    }
-}
-
-/// Compute the screen pixel position (top-left of cell) for a logical
-/// `(col, row)` cell, given the board's `origin` and `cell_px`.
-#[must_use]
-pub fn cell_origin(layout: &Layout, col: i32, row: i32, dpi: f32) -> (f32, f32) {
-    let x = (layout.origin.0 + (col) as f32 * layout.cell_px) * dpi;
-    let y = (layout.origin.1 + (row) as f32 * layout.cell_px) * dpi;
-    (x / dpi, y / dpi)
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod test {
     use super::*;
     use rstest::{fixture, rstest};
-    use tet_application::Layout;
+    use tet_application::{Layout, PlayerView};
     use tet_domain::Ruleset;
 
     /// Test DPI helpers. All return `f32`, so they can't be `#[fixture]`
@@ -246,7 +221,7 @@ mod test {
         // The bug we just fixed: width was computed from "where the last
         // grid line lands" instead of `cols * cell_px`. That left the
         // rightmost column boundary uncovered.
-        let plan = plan_board(&view, &ruleset, dpi1());
+        let plan = plan_board(&view.layout, &ruleset, dpi1());
 
         // 10 × 24 = 240. NOT 332 + 1 or any "last grid line" calculation.
         assert_eq!(plan.outer.w, 240);
@@ -258,7 +233,7 @@ mod test {
 
     #[rstest]
     fn h_line_rows_include_outer_top_and_bottom(view: PlayerView, ruleset: Ruleset) {
-        let plan = plan_board(&view, &ruleset, dpi1());
+        let plan = plan_board(&view.layout, &ruleset, dpi1());
 
         // 20 visible rows → 21 row boundaries: top of row 0 through top of
         // row 19, plus the BOTTOM pixel row of row 19. The bottom pixel row
@@ -277,7 +252,7 @@ mod test {
 
     #[rstest]
     fn v_line_cols_include_outer_left_and_right(view: PlayerView, ruleset: Ruleset) {
-        let plan = plan_board(&view, &ruleset, dpi1());
+        let plan = plan_board(&view.layout, &ruleset, dpi1());
 
         // 10 cols → 11 column boundaries: left of col 0 through left of
         // col 9, plus the RIGHT pixel column of col 9. The right pixel
@@ -297,7 +272,7 @@ mod test {
         // The rightmost vertical grid line MUST equal the rect's right
         // pixel. Otherwise there's a gap between the grid and the
         // outline.
-        let plan = plan_board(&view, &ruleset, dpi1());
+        let plan = plan_board(&view.layout, &ruleset, dpi1());
 
         assert_eq!(plan.v_line_cols[0], plan.outer.x);
         assert_eq!(
@@ -313,7 +288,7 @@ mod test {
 
     #[rstest]
     fn dpi_2_doubles_pixel_positions(view: PlayerView, ruleset: Ruleset) {
-        let plan = plan_board(&view, &ruleset, dpi2());
+        let plan = plan_board(&view.layout, &ruleset, dpi2());
 
         // Origin 116 logical × dpi 2 = 232 physical
         assert_eq!(plan.outer.x, 232);
@@ -330,7 +305,7 @@ mod test {
     fn fractional_dpi_snaps_to_nearest_pixel(mut view: PlayerView, ruleset: Ruleset) {
         // Origin 0.5 logical pixels off — must still produce integers
         view.layout.origin = (116.5, 16.5);
-        let plan = plan_board(&view, &ruleset, dpi_1_5());
+        let plan = plan_board(&view.layout, &ruleset, dpi_1_5());
 
         // 116.5 * 1.5 = 174.75 → rounds to 175
         assert_eq!(plan.outer.x, 175);
@@ -353,19 +328,6 @@ mod test {
         assert_eq!(plan.rect.h, 64);
         assert_eq!(plan.rect.right_pixel(), 423);
         assert_eq!(plan.rect.bottom_pixel(), 79);
-    }
-
-    #[rstest]
-    fn cell_origin_returns_logical_coords() {
-        // For a cell at col=2, row=3 in a 24px grid at origin (100, 200):
-        let l = Layout {
-            origin: (100.0, 200.0),
-            cell_px: 24.0,
-            ..Layout::default()
-        };
-        let (x, y) = cell_origin(&l, 2, 3, dpi1());
-        assert_eq!(x, 100.0 + 2.0 * 24.0);
-        assert_eq!(y, 200.0 + 3.0 * 24.0);
     }
 
     #[rstest]
