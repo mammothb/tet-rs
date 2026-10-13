@@ -4,18 +4,18 @@ pub trait Rng {
     fn next_u32(&mut self) -> u32;
 }
 
-#[derive(Debug)]
-pub struct Bag<R: Rng> {
+pub struct Bag {
     pieces: [MinoType; MinoType::SIZE],
     idx: u8,
-    rng: R,
+    rng: Box<dyn Rng>,
 }
 
-impl<R: Rng> Bag<R> {
-    pub fn new(rng: R) -> Self {
+impl Bag {
+    #[must_use]
+    pub fn new(rng: Box<dyn Rng>) -> Self {
         let mut rng = rng;
         let mut pieces = MinoType::ALL;
-        shuffle(&mut pieces, &mut rng);
+        shuffle(&mut pieces, &mut *rng);
         Self {
             pieces,
             idx: 0,
@@ -28,20 +28,21 @@ impl<R: Rng> Bag<R> {
         self.idx += 1;
         if self.idx as usize == MinoType::SIZE {
             self.pieces = MinoType::ALL;
-            shuffle(&mut self.pieces, &mut self.rng);
+            shuffle(&mut self.pieces, &mut *self.rng);
             self.idx = 0;
         }
         p
     }
 }
 
-pub struct Queue<R: Rng> {
-    bag: Bag<R>,
+pub struct Queue {
+    bag: Bag,
     buf: Vec<MinoType>,
 }
 
-impl<R: Rng> Queue<R> {
-    pub fn new(rng: R, buf_size: u8) -> Self {
+impl Queue {
+    #[must_use]
+    pub fn new(rng: Box<dyn Rng>, buf_size: u8) -> Self {
         let mut bag = Bag::new(rng);
         let mut buf = Vec::with_capacity(buf_size as usize);
         for _ in 0..buf_size {
@@ -50,6 +51,7 @@ impl<R: Rng> Queue<R> {
         Self { bag, buf }
     }
 
+    #[must_use]
     pub fn peek(&self) -> &[MinoType] {
         &self.buf
     }
@@ -61,7 +63,7 @@ impl<R: Rng> Queue<R> {
     }
 }
 
-fn shuffle<R: Rng + ?Sized>(arr: &mut [MinoType], rng: &mut R) {
+fn shuffle(arr: &mut [MinoType], rng: &mut dyn Rng) {
     for i in (1..arr.len()).rev() {
         let j = (rng.next_u32() as usize) % (i + 1);
         arr.swap(i, j);
@@ -103,14 +105,14 @@ mod test {
 
     #[rstest]
     fn new_bag_contains_all_seven_pieces() {
-        let bag = Bag::new(StubRng::counter());
+        let bag = Bag::new(Box::new(StubRng::counter()));
         let unique: HashSet<MinoType> = bag.pieces.iter().copied().collect();
         assert_eq!(unique.len(), 7);
     }
 
     #[rstest]
     fn take_returns_first_piece_in_bag() {
-        let bag = Bag::new(StubRng::counter());
+        let bag = Bag::new(Box::new(StubRng::counter()));
         let first = bag.pieces[0];
         let mut bag = bag;
         assert_eq!(bag.take(), first);
@@ -118,7 +120,7 @@ mod test {
 
     #[rstest]
     fn take_advances_index() {
-        let mut bag = Bag::new(StubRng::counter());
+        let mut bag = Bag::new(Box::new(StubRng::counter()));
         let _ = bag.take();
         assert_eq!(bag.idx, 1);
         let _ = bag.take();
@@ -127,7 +129,7 @@ mod test {
 
     #[rstest]
     fn take_seven_times_yields_all_seven_pieces() {
-        let mut bag = Bag::new(StubRng::counter());
+        let mut bag = Bag::new(Box::new(StubRng::counter()));
         let mut seen = HashSet::new();
         for _ in 0..7 {
             seen.insert(bag.take());
@@ -137,7 +139,7 @@ mod test {
 
     #[rstest]
     fn bag_refills_after_seven_takes() {
-        let mut bag = Bag::new(StubRng::counter());
+        let mut bag = Bag::new(Box::new(StubRng::counter()));
         for _ in 0..7 {
             bag.take();
         }
@@ -156,20 +158,20 @@ mod test {
     #[case::five(5)]
     #[case::seven(7)]
     fn new_queue_has_requested_size(#[case] n: u8) {
-        let q = Queue::new(StubRng::counter(), n);
+        let q = Queue::new(Box::new(StubRng::counter()), n);
         assert_eq!(q.buf.len(), n as usize);
     }
 
     #[rstest]
     fn new_queue_contains_unique_pieces() {
-        let q = Queue::new(StubRng::counter(), 7);
+        let q = Queue::new(Box::new(StubRng::counter()), 7);
         let unique: HashSet<MinoType> = q.buf.iter().copied().collect();
         assert_eq!(unique.len(), 7);
     }
 
     #[rstest]
     fn peek_does_not_consume() {
-        let q = Queue::new(StubRng::counter(), 3);
+        let q = Queue::new(Box::new(StubRng::counter()), 3);
         let _ = q.peek();
         let _ = q.peek();
         let _ = q.peek();
@@ -178,7 +180,7 @@ mod test {
 
     #[rstest]
     fn take_rotates_front_to_back() {
-        let mut q = Queue::new(StubRng::counter(), 3);
+        let mut q = Queue::new(Box::new(StubRng::counter()), 3);
         let initial = q.buf.clone();
         let taken = q.take();
         // Front of initial is removed and returned.
@@ -190,7 +192,7 @@ mod test {
 
     #[rstest]
     fn queue_size_invariant_after_many_takes() {
-        let mut q = Queue::new(StubRng::counter(), 5);
+        let mut q = Queue::new(Box::new(StubRng::counter()), 5);
         for _ in 0..20 {
             q.take();
             assert_eq!(q.buf.len(), 5);
@@ -199,7 +201,7 @@ mod test {
 
     #[rstest]
     fn queue_cycles_through_all_pieces_across_refills() {
-        let mut q = Queue::new(StubRng::counter(), 5);
+        let mut q = Queue::new(Box::new(StubRng::counter()), 5);
         let mut seen = HashSet::new();
         // 50 takes spans multiple bag refills; all 7 types must appear.
         for _ in 0..50 {

@@ -101,7 +101,7 @@ async fn main() {
     let mut session = GameSession::<SmallRng>::new(ruleset);
     let (_, queue_rng) = SmallRng::new(None);
     let (_, attack_rng) = SmallRng::new(None);
-    let human_idx = session.add_player(Player::new_human(queue_rng, attack_rng));
+    let human_idx = session.add_player(Player::new_human(Box::new(queue_rng), attack_rng));
     let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();

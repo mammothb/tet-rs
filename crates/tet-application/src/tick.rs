@@ -319,7 +319,7 @@ mod test {
         Player {
             board: Board::new(10, 25),
             current: Piece::spawn(MinoType::T),
-            queue: Queue::new(StubRng::counter(), 5),
+            queue: Queue::new(Box::new(StubRng::counter()), 5),
             hold: None,
             hold_used: false,
             score: 0,

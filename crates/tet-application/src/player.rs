@@ -33,7 +33,7 @@ pub struct PendingGarbage {
 pub struct Player<R: Rng> {
     pub board: Board,
     pub current: Piece,
-    pub queue: Queue<R>,
+    pub queue: Queue,
     pub hold: Option<MinoType>,
     pub hold_used: bool, // true after a hold swap; reset on next spawn-from-queue
     pub score: i32,
@@ -67,7 +67,7 @@ impl<R: Rng> Player<R> {
     /// Two RNGs because `Player<R>` stores both as owned values: one in
     /// `queue: Queue<R>`, the other as `attack_rng: R`. Since `R: Rng` doesn't
     /// require `Clone`, we can't share one.
-    pub fn new_human(queue_rng: R, attack_rng: R) -> Self {
+    pub fn new_human(queue_rng: Box<dyn Rng>, attack_rng: R) -> Self {
         let now = Instant::now();
         let mut queue = Queue::new(queue_rng, 5);
         let current = Piece::spawn(queue.take());
@@ -93,7 +93,7 @@ impl<R: Rng> Player<R> {
     /// Build a new bot-controlled player with the given `BotTransport`.
     /// Same two-RNG split as `new_human`. Active piece is drawn from the
     /// queue (first bag piece).
-    pub fn new_bot(queue_rng: R, attack_rng: R, bot: Box<dyn BotTransport>) -> Self {
+    pub fn new_bot(queue_rng: Box<dyn Rng>, attack_rng: R, bot: Box<dyn BotTransport>) -> Self {
         let now = Instant::now();
         let mut queue = Queue::new(queue_rng, 5);
         let current = Piece::spawn(queue.take());
