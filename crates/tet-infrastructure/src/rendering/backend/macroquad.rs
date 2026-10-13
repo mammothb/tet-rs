@@ -42,7 +42,6 @@
 )]
 
 use macroquad::prelude::*;
-use tet_application::{Frame, PlayerView, Renderer};
 use tet_domain::Ruleset;
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
@@ -51,6 +50,7 @@ use crate::rendering::layout::PixelRect;
 use crate::rendering::piece;
 use crate::rendering::side_panel;
 use crate::rendering::theme::{Palette, Theme};
+use crate::rendering::view::{Frame, PlayerView};
 use crate::rendering::viewport::Viewport;
 use crate::rendering::{board, hud};
 
@@ -88,21 +88,19 @@ impl MacroquadRenderer {
             canvas,
         }
     }
-}
 
-impl Default for MacroquadRenderer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Renderer for MacroquadRenderer {
-    fn render(&mut self, frame: &Frame) {
+    pub fn render(&mut self, frame: &Frame) {
         // Clear once per frame so background color matches the theme.
         self.canvas.clear(PaletteKey::Background);
         for view in &frame.views {
             render_view(view, &frame.ruleset, self.dpi_scale, &mut self.canvas);
         }
+    }
+}
+
+impl Default for MacroquadRenderer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

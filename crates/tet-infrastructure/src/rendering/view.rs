@@ -1,6 +1,10 @@
-use tet_domain::{Ruleset, Vec2};
+//! View-model types for the renderer.
+//!
+//! These types are the rendere's input contract. The composition root builds a
+//! [`Frame`] from [`PlayerSnapshot`]s and passes it to the renderer.
 
-use crate::PlayerSnapshot;
+use tet_application::PlayerSnapshot;
+use tet_domain::{Ruleset, Vec2};
 
 /// One rendered frame. The renderer interprets each view at its layout,
 /// using the ruleset for board dimensions and preview count.
@@ -98,10 +102,6 @@ impl Layout {
         // Hold box: cell_px per cell, 4 cells wide, plus 4px gap to the board.
         self.cell_px * 4.0 + 4.0
     }
-}
-
-pub trait Renderer {
-    fn render(&mut self, frame: &Frame);
 }
 
 #[cfg(test)]

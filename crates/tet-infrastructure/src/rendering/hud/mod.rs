@@ -1,12 +1,12 @@
 //! HUD overlay — stats below the board, player label above the
 //! queue column.
 
+pub mod label;
+pub mod stats;
+
 use crate::rendering::backend::canvas::Canvas;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
-
-pub mod label;
-pub mod stats;
 
 /// Render the stats line and player label. Both gated by
 /// `Layout::show_stats` and `Layout::show_label`.
@@ -23,11 +23,12 @@ pub fn draw(vp: &Viewport, theme: &Theme, label: &str, canvas: &mut dyn Canvas) 
 mod test {
     use super::*;
 
-    use tet_application::{GridStyle, Layout, Phase, Piece, PlayerSnapshot};
+    use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
 
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
     use crate::rendering::backend::canvas::{FontWeight, PaletteKey};
+    use crate::rendering::view::{GridStyle, Layout};
 
     fn test_setup() -> (PlayerSnapshot, Layout, Ruleset) {
         let ruleset = Ruleset::guideline();

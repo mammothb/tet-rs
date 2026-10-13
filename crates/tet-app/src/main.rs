@@ -1,14 +1,14 @@
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
 mod bot_worker;
 mod timer;
 
 use std::time::Instant;
 
 use macroquad::prelude::*;
-use tet_application::{
-    Frame, GameSession, GameTime, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
-};
+use tet_application::{GameSession, GameTime, Player, PlayerSnapshot, session};
 use tet_domain::{Ruleset, Vec2};
-use tet_infrastructure::{MacroquadRenderer, SmallRng};
+use tet_infrastructure::{Frame, Layout, MacroquadRenderer, PlayerView, SmallRng};
 use tokio::sync::oneshot;
 
 use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
@@ -38,13 +38,11 @@ fn assemble_frame(session: &GameSession, human_idx: usize) -> Frame {
     // Origin starts AFTER the hold box on the left, so the hold box fits
     // on screen without overlapping the board.
     let (ox, oy) = (16.0 + base_layout.hold_box_width(), 16.0);
-    #[allow(clippy::cast_precision_loss)]
     let x_spacing = base_layout.board_w(session.ruleset.num_cols) + 80.0;
 
     for i in 0..session.players.len() {
         let snapshot = session.snapshot(i);
         let layout = Layout {
-            #[allow(clippy::cast_precision_loss)]
             origin: (ox + i as f32 * x_spacing, oy),
             ..base_layout
         };
@@ -137,7 +135,6 @@ async fn main() {
         // Timer translates keyboard state into inputs.
         let input_state = collect_input_state();
         let tick = timer.tick(input_state, frame_delta_ms);
-        #[allow(clippy::cast_possible_truncation)]
         let now = GameTime::from_millis(game_start.elapsed().as_millis() as u64);
 
         // Apply timer-emitted inputs to the human only.
