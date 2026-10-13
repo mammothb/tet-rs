@@ -1,12 +1,8 @@
-#![allow(clippy::cast_possible_truncation)]
-
-use std::time::{Duration, Instant};
-
 use tet_domain::{Board, MinoType, Queue, Rng, Ruleset};
 
 use crate::ports::bot::BotTransport;
 use crate::tick::{TSpinStatus, post_lock, step_gravity, try_lock};
-use crate::{GRAVITY_MS, LOCK_DELAY_MS, Piece, TickResult};
+use crate::{GRAVITY_MS, GameTime, LOCK_DELAY_MS, Piece, TickResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -43,7 +39,7 @@ pub struct Player {
     /// When the active piece first became grounded (couldn't fall). `None`
     /// while the piece is in the air. `step_player` locks the piece if this
     /// timestamp is older than `LOCK_DELAY_MS`.
-    pub lock_grounded_at: Option<Instant>,
+    pub lock_grounded_at: Option<GameTime>,
     pub phase: Phase,
     pub controller: Controller,
     /// In-flight garbage targeting this player. New attacks are pushed onto
@@ -55,7 +51,7 @@ pub struct Player {
     /// the active piece should fall one cell. Per-player state — each
     /// `Player` ticks its own clock so gravity cadence stays in the
     /// application layer rather than the composition root.
-    pub last_gravity_at: Instant,
+    pub last_gravity_at: GameTime,
 }
 
 impl Player {
@@ -64,12 +60,9 @@ impl Player {
     /// hole column selection. The active piece is drawn from the queue
     /// (first bag piece).
     ///
-    /// Two RNGs because `Player<R>` stores both as owned values: one in
-    /// `queue: Queue<R>`, the other as `attack_rng: R`. Since `R: Rng` doesn't
-    /// require `Clone`, we can't share one.
+    /// Two RNGs: one for queue, the other for attack hole column selection.
     #[must_use]
     pub fn new_human(queue_rng: Box<dyn Rng>, attack_rng: Box<dyn Rng>) -> Self {
-        let now = Instant::now();
         let mut queue = Queue::new(queue_rng, 5);
         let current = Piece::spawn(queue.take());
         Self {
@@ -87,7 +80,7 @@ impl Player {
             controller: Controller::Human,
             pending_garbage: Vec::new(),
             attack_rng,
-            last_gravity_at: now,
+            last_gravity_at: GameTime::ZERO,
         }
     }
 
@@ -100,7 +93,6 @@ impl Player {
         attack_rng: Box<dyn Rng>,
         bot: Box<dyn BotTransport>,
     ) -> Self {
-        let now = Instant::now();
         let mut queue = Queue::new(queue_rng, 5);
         let current = Piece::spawn(queue.take());
         Self {
@@ -118,18 +110,18 @@ impl Player {
             controller: Controller::Bot(bot),
             pending_garbage: Vec::new(),
             attack_rng,
-            last_gravity_at: now,
+            last_gravity_at: GameTime::ZERO,
         }
     }
 
     /// Advance game state by one frame. Each `Player` ticks its own gravity
     /// clock — the composition root doesn't drive gravity timing. `now` is
-    /// passed in so tests don't need to mock `Instant::now()`.
+    /// passed in so tests can control time deterministically.
     ///
     /// **Lock delay is time-based**, not frame-based. The piece locks
     /// `LOCK_DELAY_MS` after it first touches the ground (or its last
     /// successful move/rotation while grounded). See `LOCK_DELAY_MS` for why.
-    pub fn step_player(&mut self, ruleset: &Ruleset, now: Instant) -> TickResult {
+    pub fn step_player(&mut self, ruleset: &Ruleset, now: GameTime) -> TickResult {
         let mut result = TickResult {
             lines_cleared: 0,
             tspin: TSpinStatus::None,
@@ -141,8 +133,7 @@ impl Player {
         }
 
         // 1. Gravity: shift down if GRAVITY_MS has elapsed since last.
-        let gravity_interval = Duration::from_millis(u64::from(GRAVITY_MS));
-        if now.duration_since(self.last_gravity_at) >= gravity_interval {
+        if now.saturating_millis_since(self.last_gravity_at) >= u64::from(GRAVITY_MS) {
             step_gravity(self);
             self.last_gravity_at = now;
         }
@@ -150,7 +141,7 @@ impl Player {
         // 2. Lock-delay: start the timer the first frame the piece is
         //    grounded; lock once `LOCK_DELAY_MS` has elapsed. Resets are
         //    handled by `apply_horizontal_input`, `apply_rotation_input`, and
-        //    `try_hold` — they set `lock_grounded_at = Some(Instant::now())`
+        //    `try_hold` — they set `lock_grounded_at = Some(now)`
         //    on success, restarting the timer.
         if crate::tick::piece_can_fall(self) {
             // Piece is in the air — no lock timer running.
@@ -159,7 +150,7 @@ impl Player {
             // Piece is grounded — start the timer if first grounded frame,
             // otherwise check if the lock delay has elapsed.
             let grounded_at = *self.lock_grounded_at.get_or_insert(now);
-            if now.duration_since(grounded_at).as_millis() as u64 >= u64::from(LOCK_DELAY_MS) {
+            if now.saturating_millis_since(grounded_at) >= u64::from(LOCK_DELAY_MS) {
                 result = try_lock(self);
                 post_lock(self, &result, ruleset);
                 // Clear the timer so a future piece (if any) starts fresh.

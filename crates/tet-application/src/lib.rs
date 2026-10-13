@@ -5,6 +5,7 @@ pub mod ports;
 pub mod session;
 pub mod snapshot;
 pub mod tick;
+pub mod time;
 
 pub use constants::{
     ARR_FRAMES, ATTACK_FOR_LINES, DAS_FRAMES, GARBAGE_DELAY_FRAMES, GRAVITY_MS, LOCK_DELAY_MS,
@@ -22,3 +23,4 @@ pub use tick::{
     TSpinStatus, TickResult, apply_horizontal_input, apply_rotation_input, hard_drop, soft_drop,
     try_hold,
 };
+pub use time::GameTime;

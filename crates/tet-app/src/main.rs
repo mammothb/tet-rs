@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use macroquad::prelude::*;
 use tet_application::{
-    Frame, GameSession, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
+    Frame, GameSession, GameTime, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
 };
 use tet_domain::{Ruleset, Vec2};
 use tet_infrastructure::{MacroquadRenderer, SmallRng};
@@ -107,6 +107,7 @@ async fn main() {
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
     let mut timer = Timer::new();
+    let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
     // Init tracing so we can see what values the renderer is computing.
@@ -136,15 +137,17 @@ async fn main() {
         // Timer translates keyboard state into inputs.
         let input_state = collect_input_state();
         let tick = timer.tick(input_state, frame_delta_ms);
+        #[allow(clippy::cast_possible_truncation)]
+        let now = GameTime::from_millis(game_start.elapsed().as_millis() as u64);
 
         // Apply timer-emitted inputs to the human only.
         for input in tick.inputs {
-            session.apply_input(human_idx, input);
+            session.apply_input(human_idx, input, now);
         }
 
         // Frame tick: garbage arrival, per-player game state (including
         // gravity timing), line-clear distribution.
-        session.step_frame(Instant::now());
+        session.step_frame(now);
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {

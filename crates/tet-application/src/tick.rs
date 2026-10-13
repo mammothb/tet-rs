@@ -1,6 +1,6 @@
 use tet_domain::{Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
-use crate::{Phase, Piece, Player};
+use crate::{GameTime, Phase, Piece, Player};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum TSpinStatus {
@@ -34,7 +34,7 @@ pub fn step_gravity(player: &mut Player) -> bool {
     true
 }
 
-pub fn apply_horizontal_input(player: &mut Player, dx: i8) -> bool {
+pub fn apply_horizontal_input(player: &mut Player, dx: i8, now: GameTime) -> bool {
     let original = player.current.pos;
     player.current.shift(v2![dx, 0]);
     if player
@@ -47,12 +47,17 @@ pub fn apply_horizontal_input(player: &mut Player, dx: i8) -> bool {
         // Successful shift — restart the lock timer if the piece is still
         // grounded (the next `step_player` call clears it if the piece
         // lifted into the air).
-        player.lock_grounded_at = Some(std::time::Instant::now());
+        player.lock_grounded_at = Some(now);
         true
     }
 }
 
-pub fn apply_rotation_input(player: &mut Player, ruleset: &Ruleset, rot: Rotation) -> bool {
+pub fn apply_rotation_input(
+    player: &mut Player,
+    ruleset: &Ruleset,
+    rot: Rotation,
+    now: GameTime,
+) -> bool {
     let new_orient = player.current.orientation.rotate(rot);
     let kicks = ruleset.kicks(player.current.kind, new_orient, rot);
 
@@ -67,7 +72,7 @@ pub fn apply_rotation_input(player: &mut Player, ruleset: &Ruleset, rot: Rotatio
         {
             // Successful rotation — restart the lock timer if the piece is
             // still grounded (next `step_player` clears it if the piece lifted).
-            player.lock_grounded_at = Some(std::time::Instant::now());
+            player.lock_grounded_at = Some(now);
             return true;
         }
     }
@@ -274,8 +279,6 @@ fn update_score(player: &mut Player, result: &TickResult, _ruleset: &Ruleset) {
 mod test {
     use super::*;
 
-    use std::time::{Duration, Instant};
-
     use rstest::rstest;
 
     use tet_domain::{Board, Queue, Rng};
@@ -330,7 +333,7 @@ mod test {
             controller: Controller::Bot(Box::new(NoopBot)),
             pending_garbage: Vec::new(),
             attack_rng: Box::new(StubRng::counter()),
-            last_gravity_at: Instant::now(),
+            last_gravity_at: GameTime::ZERO,
         }
     }
 
@@ -394,7 +397,7 @@ mod test {
     fn apply_horizontal_input_shifts_piece(#[case] dx: i8) {
         let mut p = t_player();
         let original = p.current.pos;
-        assert!(apply_horizontal_input(&mut p, dx));
+        assert!(apply_horizontal_input(&mut p, dx, GameTime::ZERO));
         assert_eq!(p.current.pos, original + v2![dx, 0]);
     }
 
@@ -403,28 +406,17 @@ mod test {
         let mut p = t_player();
         p.current.pos = v2![0, 18];
         let original = p.current.pos;
-        assert!(!apply_horizontal_input(&mut p, -1));
+        assert!(!apply_horizontal_input(&mut p, -1, GameTime::ZERO));
         assert_eq!(p.current.pos, original);
     }
 
     #[rstest]
-    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
     fn apply_horizontal_input_restarts_lock_timer_on_success() {
-        // Set the lock timer to a moment long ago — it's about to fire.
-        // After a successful shift, the timer should be reset to "now".
         let mut p = t_player();
-        p.lock_grounded_at = Some(Instant::now() - Duration::from_secs(10));
-        assert!(apply_horizontal_input(&mut p, 1));
-        // The timer is now Some(very recent Instant). We can't pin the exact
-        // value, but it should be within a few seconds of "now".
-        let grounded_at = p
-            .lock_grounded_at
-            .expect("lock_grounded_at should be Some after successful shift");
-        let age = Instant::now().duration_since(grounded_at);
-        assert!(
-            age < Duration::from_secs(1),
-            "lock timer should be recent, was {age:?} ago"
-        );
+        p.lock_grounded_at = Some(GameTime::from_millis(100));
+        let now = GameTime::from_millis(200);
+        assert!(apply_horizontal_input(&mut p, 1, now));
+        assert_eq!(p.lock_grounded_at, Some(now));
     }
 
     // -------- apply_rotation_input --------
@@ -435,7 +427,8 @@ mod test {
         assert!(apply_rotation_input(
             &mut p,
             &Ruleset::guideline(),
-            Rotation::CW
+            Rotation::CW,
+            GameTime::ZERO
         ));
         assert_eq!(p.current.orientation, Orientation::East);
     }
@@ -626,7 +619,7 @@ mod test {
         // Piece is grounded with timer set. After hold, the timer should
         // be cleared — the new piece hasn't been grounded yet.
         let mut p = t_player();
-        p.lock_grounded_at = Some(Instant::now());
+        p.lock_grounded_at = Some(GameTime::from_millis(100));
         try_hold(&mut p);
         assert!(p.lock_grounded_at.is_none());
     }
