@@ -6,8 +6,8 @@ mod timer;
 use std::time::Instant;
 
 use macroquad::prelude::*;
-use tet_application::{GameSession, GameTime, Player, PlayerSnapshot, session};
-use tet_domain::{Ruleset, Vec2};
+use tet_application::{GameSession, GameTime, Player, session, tick};
+use tet_domain::Ruleset;
 use tet_infrastructure::{Frame, Layout, MacroquadRenderer, PlayerView, SmallRng};
 use tokio::sync::oneshot;
 
@@ -48,7 +48,7 @@ fn assemble_frame(session: &GameSession, human_idx: usize) -> Frame {
         };
         let label = if i == human_idx { "human" } else { "bot" };
         let ghost = if matches!(snapshot.phase, tet_application::Phase::Playing) {
-            Some(ghost_position_from_snapshot(&snapshot))
+            Some(tick::project_ghost_pos(&snapshot.board, snapshot.current))
         } else {
             None
         };
@@ -64,25 +64,6 @@ fn assemble_frame(session: &GameSession, human_idx: usize) -> Frame {
     Frame {
         ruleset: session.ruleset.clone(),
         views,
-    }
-}
-
-/// Compute the landing position from a snapshot. Iterates downward until
-/// the piece would collide with the board; returns the last valid `y`.
-fn ghost_position_from_snapshot(snapshot: &PlayerSnapshot) -> Vec2 {
-    let pos = snapshot.current.pos;
-    let mut y = pos.y;
-    loop {
-        let next_y = y - 1;
-        let candidate = Vec2::new(pos.x, next_y);
-        let cells = snapshot
-            .current
-            .cells()
-            .map(|c| Vec2::new(c.x, c.y + (next_y - pos.y)));
-        if snapshot.board.collides(&cells) {
-            return Vec2::new(pos.x, y);
-        }
-        y = candidate.y;
     }
 }
 

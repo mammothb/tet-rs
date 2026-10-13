@@ -1,4 +1,4 @@
-use tet_domain::{Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
+use tet_domain::{Board, Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
 use crate::{GameTime, Phase, Piece, Player};
 
@@ -128,16 +128,20 @@ pub fn spawn_next_piece(player: &mut Player) {
 }
 
 #[must_use]
-pub fn project_ghost(player: &Player) -> Vec2 {
-    let mut ghost = player.current;
+pub fn project_ghost_pos(board: &Board, piece: Piece) -> Vec2 {
+    let mut ghost = piece;
     loop {
         let original = ghost.pos;
         ghost.shift(v2![0, -1]);
-        if player.board.collides(&ghost.cells()) {
+        if board.collides(&ghost.cells()) {
             ghost.pos = original;
             return ghost.pos;
         }
     }
+}
+
+fn project_ghost(player: &Player) -> Vec2 {
+    project_ghost_pos(&player.board, player.current)
 }
 
 #[must_use]
