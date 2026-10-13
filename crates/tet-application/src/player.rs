@@ -15,6 +15,15 @@ pub enum Controller {
     Bot(Box<dyn BotTransport>),
 }
 
+/// Scoring and combo tracking for one player
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScoreState {
+    pub score: i32,
+    pub lines: u32,
+    pub combo: i32,
+    pub b2b: bool,
+}
+
 /// Garbage that has been launched at this player but not yet inserted.
 /// `delay_remaining` counts down each frame; when it reaches 0, the rows are
 /// pushed onto the board. While in flight, the player can cancel rows by
@@ -26,27 +35,29 @@ pub struct PendingGarbage {
     pub delay_remaining: u8,
 }
 
+/// In-flight garbage queue and the RNG for attack hole column selection
+pub struct GarbageState {
+    /// In-flight garbage targeting this player. New attacks are pushed onto
+    /// the back; cancellation peels from the back (most recent first).
+    pub pending: Vec<PendingGarbage>,
+    /// RNG used to generate attack hole columns.
+    pub attack_rng: Box<dyn Rng>,
+}
+
 pub struct Player {
     pub board: Board,
     pub current: Piece,
     pub queue: Queue,
     pub hold: Option<MinoType>,
     pub hold_used: bool, // true after a hold swap; reset on next spawn-from-queue
-    pub score: i32,
-    pub lines: u32,
-    pub combo: i32,
-    pub b2b: bool,
+    pub scoring: ScoreState,
     /// When the active piece first became grounded (couldn't fall). `None`
     /// while the piece is in the air. `step_player` locks the piece if this
     /// timestamp is older than `LOCK_DELAY_MS`.
     pub lock_grounded_at: Option<GameTime>,
     pub phase: Phase,
     pub controller: Controller,
-    /// In-flight garbage targeting this player. New attacks are pushed onto
-    /// the back; cancellation peels from the back (most recent first).
-    pub pending_garbage: Vec<PendingGarbage>,
-    /// RNG used to generate attack hole columns.
-    pub attack_rng: Box<dyn Rng>,
+    pub garbage: GarbageState,
     /// Time of the last gravity shift. Used by `step_player` to decide when
     /// the active piece should fall one cell. Per-player state — each
     /// `Player` ticks its own clock so gravity cadence stays in the
@@ -71,15 +82,14 @@ impl Player {
             queue,
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Human,
-            pending_garbage: Vec::new(),
-            attack_rng,
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng,
+            },
             last_gravity_at: GameTime::ZERO,
         }
     }
@@ -101,15 +111,14 @@ impl Player {
             queue,
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(bot),
-            pending_garbage: Vec::new(),
-            attack_rng,
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng,
+            },
             last_gravity_at: GameTime::ZERO,
         }
     }

@@ -43,10 +43,10 @@ impl GameSession {
 
             // 1. Decrement pending garbage delays; insert ready rows.
             let mut i = 0;
-            while i < player.pending_garbage.len() {
-                player.pending_garbage[i].delay_remaining -= 1;
-                if player.pending_garbage[i].delay_remaining == 0 {
-                    let a = player.pending_garbage.remove(i);
+            while i < player.garbage.pending.len() {
+                player.garbage.pending[i].delay_remaining -= 1;
+                if player.garbage.pending[i].delay_remaining == 0 {
+                    let a = player.garbage.pending.remove(i);
                     player.board.insert_garbage(a.count, a.hole);
                 } else {
                     i += 1;
@@ -124,11 +124,11 @@ impl GameSession {
             board: p.board.clone(),
             queue: p.queue.peek().to_vec(),
             hold: p.hold,
-            combo: p.combo,
-            b2b: p.b2b,
+            combo: p.scoring.combo,
+            b2b: p.scoring.b2b,
             current: p.current,
             phase: p.phase,
-            pending_garbage: p.pending_garbage.clone(),
+            pending_garbage: p.garbage.pending.clone(),
         }
     }
 
@@ -147,7 +147,7 @@ impl GameSession {
             if count == 0 {
                 continue;
             }
-            let hole = u8::try_from(self.players[idx].attack_rng.next_u32() % num_cols)
+            let hole = u8::try_from(self.players[idx].garbage.attack_rng.next_u32() % num_cols)
                 .expect("hole column fits in u8");
             let atk = PendingGarbage {
                 count,
@@ -161,7 +161,7 @@ impl GameSession {
             }
         }
         for (opp, atk) in pending {
-            self.players[opp].pending_garbage.push(atk);
+            self.players[opp].garbage.pending.push(atk);
         }
     }
 }
@@ -221,11 +221,10 @@ mod test {
     use rstest::rstest;
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue, Rng};
 
-    use crate::PendingGarbage;
-    use crate::TSpinStatus;
-    use crate::player::{Controller, Player};
+    use crate::player::{Controller, GarbageState, Player, ScoreState};
     use crate::ports::bot::BotTransport;
     use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
+    use crate::{PendingGarbage, TSpinStatus};
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
     struct StubRng {
@@ -343,15 +342,14 @@ mod test {
             queue: Queue::new(Box::new(StubRng::counter()), 5),
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(StubBot::empty())),
-            pending_garbage: Vec::new(),
-            attack_rng: Box::new(StubRng::counter()),
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng: Box::new(StubRng::counter()),
+            },
             last_gravity_at: GameTime::ZERO,
         }
     }
@@ -395,27 +393,27 @@ mod test {
     #[rstest]
     fn step_frame_decrements_pending_garbage_delay() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 5,
             delay_remaining: 5,
         });
         session.step_frame(GameTime::from_millis(16));
-        assert_eq!(session.players[0].pending_garbage[0].delay_remaining, 4);
-        assert_eq!(session.players[0].pending_garbage.len(), 1);
+        assert_eq!(session.players[0].garbage.pending[0].delay_remaining, 4);
+        assert_eq!(session.players[0].garbage.pending.len(), 1);
     }
 
     #[rstest]
     fn step_frame_inserts_garbage_when_delay_hits_zero() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
             delay_remaining: 1,
         });
         session.step_frame(GameTime::from_millis(16));
         // Pending drained
-        assert!(session.players[0].pending_garbage.is_empty());
+        assert!(session.players[0].garbage.pending.is_empty());
         // Board has garbage with hole at col 0
         assert_eq!(session.players[0].board.get(v2![0, 0]), Cell::Empty);
         assert_eq!(session.players[0].board.get(v2![1, 0]), Cell::Garbage);
@@ -465,8 +463,8 @@ mod test {
     #[rstest]
     fn snapshot_captures_combo_and_b2b() {
         let mut session = t_session();
-        session.players[0].combo = 3;
-        session.players[0].b2b = true;
+        session.players[0].scoring.combo = 3;
+        session.players[0].scoring.b2b = true;
         let snap = session.snapshot(0);
         assert_eq!(snap.combo, 3);
         assert!(snap.b2b);
@@ -485,7 +483,7 @@ mod test {
     #[rstest]
     fn snapshot_captures_pending_garbage() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 7,
             delay_remaining: 6,
@@ -538,8 +536,8 @@ mod test {
             },
         ];
         session.distribute_garbage(&results);
-        assert!(session.players[0].pending_garbage.is_empty());
-        assert!(session.players[1].pending_garbage.is_empty());
+        assert!(session.players[0].garbage.pending.is_empty());
+        assert!(session.players[1].garbage.pending.is_empty());
     }
 
     #[rstest]
@@ -564,16 +562,16 @@ mod test {
             session.distribute_garbage(&results);
             if expected_rows == 0 {
                 assert!(
-                    session.players[1].pending_garbage.is_empty(),
+                    session.players[1].garbage.pending.is_empty(),
                     "lines={lines} should send 0 rows"
                 );
             } else {
                 assert_eq!(
-                    session.players[1].pending_garbage.len(),
+                    session.players[1].garbage.pending.len(),
                     1,
                     "lines={lines} should send {expected_rows} rows"
                 );
-                assert_eq!(session.players[1].pending_garbage[0].count, expected_rows);
+                assert_eq!(session.players[1].garbage.pending[0].count, expected_rows);
             }
         }
     }
@@ -597,8 +595,8 @@ mod test {
             },
         ];
         session.distribute_garbage(&results);
-        assert_eq!(session.players[0].pending_garbage.len(), 0); // attacker
-        assert_eq!(session.players[1].pending_garbage.len(), 1); // opponent
+        assert_eq!(session.players[0].garbage.pending.len(), 0); // attacker
+        assert_eq!(session.players[1].garbage.pending.len(), 1); // opponent
     }
 
     #[rstest]
@@ -626,11 +624,11 @@ mod test {
         ];
         session.distribute_garbage(&results);
         // p0 receives from p1
-        assert_eq!(session.players[0].pending_garbage.len(), 1);
+        assert_eq!(session.players[0].garbage.pending.len(), 1);
         // p1 receives from p0
-        assert_eq!(session.players[1].pending_garbage.len(), 1);
+        assert_eq!(session.players[1].garbage.pending.len(), 1);
         // p2 receives from both p0 and p1
-        assert_eq!(session.players[2].pending_garbage.len(), 2);
+        assert_eq!(session.players[2].garbage.pending.len(), 2);
     }
 
     #[rstest]
@@ -652,7 +650,7 @@ mod test {
         ];
         session.distribute_garbage(&results);
         assert_eq!(
-            session.players[1].pending_garbage[0].delay_remaining,
+            session.players[1].garbage.pending[0].delay_remaining,
             GARBAGE_DELAY_FRAMES
         );
     }
@@ -661,12 +659,12 @@ mod test {
     fn distribute_garbage_hole_uses_attacker_rng() {
         let mut p0 = empty_player();
         // Force attack_rng to return a specific value.
-        p0.attack_rng = Box::new(StubRng {
+        p0.garbage.attack_rng = Box::new(StubRng {
             values: vec![42],
             idx: 0,
         });
         let mut p1 = empty_player();
-        p1.attack_rng = Box::new(StubRng {
+        p1.garbage.attack_rng = Box::new(StubRng {
             values: vec![7],
             idx: 0,
         });
@@ -687,9 +685,9 @@ mod test {
         ];
         session.distribute_garbage(&results);
         // p0's attack_rng returned 42 → 42 % 10 = 2 (sent to p1)
-        assert_eq!(session.players[1].pending_garbage[0].hole, 2);
+        assert_eq!(session.players[1].garbage.pending[0].hole, 2);
         // p1's attack_rng returned 7 → 7 % 10 = 7 (sent to p0)
-        assert_eq!(session.players[0].pending_garbage[0].hole, 7);
+        assert_eq!(session.players[0].garbage.pending[0].hole, 7);
     }
 
     // -------- apply_input --------

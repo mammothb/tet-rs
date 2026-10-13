@@ -105,12 +105,12 @@ pub fn post_lock(player: &mut Player, result: &TickResult, ruleset: &Ruleset) {
 
 pub fn cancel_pending_garbage(player: &mut Player, mut to_cancel: u8) {
     while to_cancel > 0 {
-        let Some(top) = player.pending_garbage.last_mut() else {
+        let Some(top) = player.garbage.pending.last_mut() else {
             break;
         };
         if top.count <= to_cancel {
             to_cancel -= top.count;
-            player.pending_garbage.pop();
+            player.garbage.pending.pop();
         } else {
             top.count -= to_cancel;
             to_cancel = 0;
@@ -215,17 +215,18 @@ fn detect_tspin(player: &Player) -> TSpinStatus {
 }
 
 fn update_score(player: &mut Player, result: &TickResult, _ruleset: &Ruleset) {
+    let scoring = &mut player.scoring;
     let lines = result.lines_cleared;
 
     if lines == 0 {
         // No clear, break combo (set to -1 = broken; reset to 0 on next clear).
-        if player.combo > 0 {
-            player.combo = -1;
+        if scoring.combo > 0 {
+            scoring.combo = -1;
         }
         return;
     }
 
-    player.lines += u32::from(lines);
+    scoring.lines += u32::from(lines);
 
     // Base points per line clear.
     let base = match lines {
@@ -245,19 +246,19 @@ fn update_score(player: &mut Player, result: &TickResult, _ruleset: &Ruleset) {
 
     // Back-to-back: +50% of base on a difficult clear following a difficult one.
     let was_difficult = lines == 4 || result.tspin != TSpinStatus::None;
-    let b2b_bonus = if player.b2b && was_difficult {
+    let b2b_bonus = if scoring.b2b && was_difficult {
         base / 2
     } else {
         0
     };
-    player.b2b = was_difficult;
+    scoring.b2b = was_difficult;
 
-    player.score += base + tspin_bonus + b2b_bonus;
+    scoring.score += base + tspin_bonus + b2b_bonus;
 
     // Combo: +50 per consecutive clear (starting from the 2nd).
-    player.combo += 1;
-    if player.combo >= 2 {
-        player.score += 50 * (player.combo - 1);
+    scoring.combo += 1;
+    if scoring.combo >= 2 {
+        scoring.score += 50 * (scoring.combo - 1);
     }
 }
 
@@ -269,7 +270,7 @@ mod test {
 
     use tet_domain::{Board, Queue, Rng};
 
-    use crate::player::{Controller, PendingGarbage, Player};
+    use crate::player::{Controller, GarbageState, PendingGarbage, Player, ScoreState};
     use crate::ports::bot::{BotError, BotMove, BotTransport};
     use crate::snapshot::PlayerSnapshot;
 
@@ -310,15 +311,14 @@ mod test {
             queue: Queue::new(Box::new(StubRng::counter()), 5),
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(NoopBot)),
-            pending_garbage: Vec::new(),
-            attack_rng: Box::new(StubRng::counter()),
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng: Box::new(StubRng::counter()),
+            },
             last_gravity_at: GameTime::ZERO,
         }
     }
@@ -326,6 +326,7 @@ mod test {
     /// Stub `BotTransport` that does nothing. Needed only to fill the
     /// `Controller::Bot` variant for `t_player`. Not used in any test.
     struct NoopBot;
+
     #[async_trait::async_trait]
     impl BotTransport for NoopBot {
         fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
@@ -458,45 +459,45 @@ mod test {
     #[rstest]
     fn cancel_pending_garbage_removes_whole_attack_when_small() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 0,
             delay_remaining: 5,
         });
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 2);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 1);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 1);
     }
 
     #[rstest]
     fn cancel_pending_garbage_truncates_last_attack() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 2);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 2);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 2);
     }
 
     #[rstest]
     fn cancel_pending_garbage_no_op_when_to_cancel_is_zero() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 3,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 0);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 3);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 3);
     }
 
     // -------- spawn_next_piece --------
@@ -615,20 +616,20 @@ mod test {
     #[rstest]
     fn update_score_breaks_combo_on_no_clear() {
         let mut p = t_player();
-        p.combo = 3;
+        p.scoring.combo = 3;
         let result = TickResult {
             lines_cleared: 0,
             tspin: TSpinStatus::None,
             piece_locked: false,
         };
         update_score(&mut p, &result, &Ruleset::guideline());
-        assert_eq!(p.combo, -1);
+        assert_eq!(p.scoring.combo, -1);
     }
 
     #[rstest]
     fn update_score_breaks_combo_to_zero_on_first_clear() {
         let mut p = t_player();
-        p.combo = -1; // broken from last time
+        p.scoring.combo = -1; // broken from last time
         let result = TickResult {
             lines_cleared: 1,
             tspin: TSpinStatus::None,
@@ -638,21 +639,21 @@ mod test {
         // Doc says `combo += 1`; from -1 that gives 0. To reset to 1 instead,
         // the implementation needs `combo = combo.max(0) + 1`. Documenting
         // current behavior; can fix the doc + impl together later.
-        assert_eq!(p.combo, 0);
+        assert_eq!(p.scoring.combo, 0);
     }
 
     #[rstest]
     fn update_score_sets_b2b_on_difficult_clears() {
         let mut p = t_player();
-        p.b2b = true;
+        p.scoring.b2b = true;
         let result = TickResult {
             lines_cleared: 4,
             tspin: TSpinStatus::None,
             piece_locked: false,
         };
         update_score(&mut p, &result, &Ruleset::guideline());
-        assert!(p.b2b);
-        assert!(p.score >= 800 + 400); // quad + b2b bonus
+        assert!(p.scoring.b2b);
+        assert!(p.scoring.score >= 800 + 400); // quad + b2b bonus
     }
 
     // -------- detect_tspin --------
