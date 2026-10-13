@@ -60,11 +60,12 @@ pub(crate) fn for_each_piece_cell<F>(
 mod test {
     use super::*;
 
-    use tet_application::{GridStyle, Layout, Phase, Piece, PlayerSnapshot};
+    use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
 
     use crate::rendering::backend::canvas::PaletteKey;
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
+    use crate::rendering::view::{GridStyle, Layout};
 
     fn test_setup() -> (PlayerSnapshot, Layout, Ruleset) {
         let ruleset = Ruleset::guideline();

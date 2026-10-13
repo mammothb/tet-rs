@@ -1,6 +1,6 @@
-use tet_domain::{Cell, MinoType, Orientation, Rng, Rotation, Ruleset, Vec2, v2};
+use tet_domain::{Board, Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
-use crate::{Phase, Piece, Player};
+use crate::{GameTime, Phase, Piece, Player};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum TSpinStatus {
@@ -19,13 +19,14 @@ pub struct TickResult {
 
 /// True if shifting the active piece down by 1 cell wouldn't collide with the
 /// board. Does not mutate the piece.
-pub fn piece_can_fall<R: Rng>(player: &Player<R>) -> bool {
+#[must_use]
+pub fn piece_can_fall(player: &Player) -> bool {
     let mut shifted = player.current;
     shifted.shift(v2![0, -1]);
-    !player.board.collides(&shifted.cells().collect::<Vec<_>>())
+    !player.board.collides(&shifted.cells())
 }
 
-pub fn step_gravity<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn step_gravity(player: &mut Player) -> bool {
     if !piece_can_fall(player) {
         return false;
     }
@@ -33,28 +34,26 @@ pub fn step_gravity<R: Rng>(player: &mut Player<R>) -> bool {
     true
 }
 
-pub fn apply_horizontal_input<R: Rng>(player: &mut Player<R>, dx: i8) -> bool {
+pub fn apply_horizontal_input(player: &mut Player, dx: i8, now: GameTime) -> bool {
     let original = player.current.pos;
     player.current.shift(v2![dx, 0]);
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.current.pos = original;
         false
     } else {
         // Successful shift — restart the lock timer if the piece is still
         // grounded (the next `step_player` call clears it if the piece
         // lifted into the air).
-        player.lock_grounded_at = Some(std::time::Instant::now());
+        player.lock_grounded_at = Some(now);
         true
     }
 }
 
-pub fn apply_rotation_input<R: Rng>(
-    player: &mut Player<R>,
+pub fn apply_rotation_input(
+    player: &mut Player,
     ruleset: &Ruleset,
     rot: Rotation,
+    now: GameTime,
 ) -> bool {
     let new_orient = player.current.orientation.rotate(rot);
     let kicks = ruleset.kicks(player.current.kind, new_orient, rot);
@@ -64,13 +63,10 @@ pub fn apply_rotation_input<R: Rng>(
     for kick in kicks {
         player.current.orientation = new_orient;
         player.current.pos = orig_pos + *kick;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             // Successful rotation — restart the lock timer if the piece is
             // still grounded (next `step_player` clears it if the piece lifted).
-            player.lock_grounded_at = Some(std::time::Instant::now());
+            player.lock_grounded_at = Some(now);
             return true;
         }
     }
@@ -82,7 +78,7 @@ pub fn apply_rotation_input<R: Rng>(
 /// # Panics
 ///
 /// Number of full rows exceed u8 limit
-pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
+pub fn try_lock(player: &mut Player) -> TickResult {
     let tspin = detect_tspin(player);
     for cell in player.current.cells() {
         player.board.set(cell, Cell::Block(player.current.kind));
@@ -98,7 +94,7 @@ pub fn try_lock<R: Rng>(player: &mut Player<R>) -> TickResult {
     }
 }
 
-pub fn post_lock<R: Rng>(player: &mut Player<R>, result: &TickResult, ruleset: &Ruleset) {
+pub fn post_lock(player: &mut Player, result: &TickResult, ruleset: &Ruleset) {
     cancel_pending_garbage(player, result.lines_cleared);
     update_score(player, result, ruleset);
     spawn_next_piece(player);
@@ -107,14 +103,14 @@ pub fn post_lock<R: Rng>(player: &mut Player<R>, result: &TickResult, ruleset: &
     }
 }
 
-pub fn cancel_pending_garbage<R: Rng>(player: &mut Player<R>, mut to_cancel: u8) {
+pub fn cancel_pending_garbage(player: &mut Player, mut to_cancel: u8) {
     while to_cancel > 0 {
-        let Some(top) = player.pending_garbage.last_mut() else {
+        let Some(top) = player.garbage.pending.last_mut() else {
             break;
         };
         if top.count <= to_cancel {
             to_cancel -= top.count;
-            player.pending_garbage.pop();
+            player.garbage.pending.pop();
         } else {
             top.count -= to_cancel;
             to_cancel = 0;
@@ -122,46 +118,47 @@ pub fn cancel_pending_garbage<R: Rng>(player: &mut Player<R>, mut to_cancel: u8)
     }
 }
 
-pub fn spawn_next_piece<R: Rng>(player: &mut Player<R>) {
+pub fn spawn_next_piece(player: &mut Player) {
     let kind = player.queue.take();
     player.current = Piece::spawn(kind);
     player.hold_used = false;
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.phase = Phase::GameOver;
     }
 }
 
-pub fn project_ghost<R: Rng>(player: &Player<R>) -> Vec2 {
-    let mut ghost = player.current;
+#[must_use]
+pub fn project_ghost_pos(board: &Board, piece: Piece) -> Vec2 {
+    let mut ghost = piece;
     loop {
         let original = ghost.pos;
         ghost.shift(v2![0, -1]);
-        if player.board.collides(&ghost.cells().collect::<Vec<_>>()) {
+        if board.collides(&ghost.cells()) {
             ghost.pos = original;
             return ghost.pos;
         }
     }
 }
 
-pub fn check_topout<R: Rng>(player: &Player<R>) -> bool {
-    player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
+fn project_ghost(player: &Player) -> Vec2 {
+    project_ghost_pos(&player.board, player.current)
 }
 
-pub fn hard_drop<R: Rng>(player: &mut Player<R>) -> TickResult {
+#[must_use]
+pub fn check_topout(player: &Player) -> bool {
+    player.board.collides(&player.current.cells())
+}
+
+pub fn hard_drop(player: &mut Player) -> TickResult {
     player.current.pos = project_ghost(player);
     try_lock(player)
 }
 
-pub fn soft_drop<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn soft_drop(player: &mut Player) -> bool {
     step_gravity(player)
 }
 
-pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
+pub fn try_hold(player: &mut Player) -> bool {
     if player.hold_used {
         return false;
     }
@@ -181,16 +178,13 @@ pub fn try_hold<R: Rng>(player: &mut Player<R>) -> bool {
     // sets it if the new piece spawns grounded).
     player.lock_grounded_at = None;
     player.hold_used = true;
-    if player
-        .board
-        .collides(&player.current.cells().collect::<Vec<_>>())
-    {
+    if player.board.collides(&player.current.cells()) {
         player.phase = Phase::GameOver;
     }
     true
 }
 
-fn detect_tspin<R: Rng>(player: &Player<R>) -> TSpinStatus {
+fn detect_tspin(player: &Player) -> TSpinStatus {
     if player.current.kind != MinoType::T {
         return TSpinStatus::None;
     }
@@ -224,18 +218,19 @@ fn detect_tspin<R: Rng>(player: &Player<R>) -> TSpinStatus {
     }
 }
 
-fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &Ruleset) {
+fn update_score(player: &mut Player, result: &TickResult, _ruleset: &Ruleset) {
+    let scoring = &mut player.scoring;
     let lines = result.lines_cleared;
 
     if lines == 0 {
         // No clear, break combo (set to -1 = broken; reset to 0 on next clear).
-        if player.combo > 0 {
-            player.combo = -1;
+        if scoring.combo > 0 {
+            scoring.combo = -1;
         }
         return;
     }
 
-    player.lines += u32::from(lines);
+    scoring.lines += u32::from(lines);
 
     // Base points per line clear.
     let base = match lines {
@@ -255,19 +250,19 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
 
     // Back-to-back: +50% of base on a difficult clear following a difficult one.
     let was_difficult = lines == 4 || result.tspin != TSpinStatus::None;
-    let b2b_bonus = if player.b2b && was_difficult {
+    let b2b_bonus = if scoring.b2b && was_difficult {
         base / 2
     } else {
         0
     };
-    player.b2b = was_difficult;
+    scoring.b2b = was_difficult;
 
-    player.score += base + tspin_bonus + b2b_bonus;
+    scoring.score += base + tspin_bonus + b2b_bonus;
 
     // Combo: +50 per consecutive clear (starting from the 2nd).
-    player.combo += 1;
-    if player.combo >= 2 {
-        player.score += 50 * (player.combo - 1);
+    scoring.combo += 1;
+    if scoring.combo >= 2 {
+        scoring.score += 50 * (scoring.combo - 1);
     }
 }
 
@@ -275,13 +270,11 @@ fn update_score<R: Rng>(player: &mut Player<R>, result: &TickResult, _ruleset: &
 mod test {
     use super::*;
 
-    use std::time::{Duration, Instant};
-
     use rstest::rstest;
 
-    use tet_domain::{Board, Queue};
+    use tet_domain::{Board, Queue, Rng};
 
-    use crate::player::{Controller, PendingGarbage, Player};
+    use crate::player::{Controller, GarbageState, PendingGarbage, Player, ScoreState};
     use crate::ports::bot::{BotError, BotMove, BotTransport};
     use crate::snapshot::PlayerSnapshot;
 
@@ -315,29 +308,29 @@ mod test {
     /// here (not from the queue) because tests that use this fixture want
     /// a guaranteed T-piece setup. `last_gravity_at` is set to "now" so
     /// gravity doesn't fire on the first `step_player` call.
-    fn t_player() -> Player<StubRng> {
+    fn t_player() -> Player {
         Player {
             board: Board::new(10, 25),
             current: Piece::spawn(MinoType::T),
-            queue: Queue::new(StubRng::counter(), 5),
+            queue: Queue::new(Box::new(StubRng::counter()), 5),
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(NoopBot)),
-            pending_garbage: Vec::new(),
-            attack_rng: StubRng::counter(),
-            last_gravity_at: Instant::now(),
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng: Box::new(StubRng::counter()),
+            },
+            last_gravity_at: GameTime::ZERO,
         }
     }
 
     /// Stub `BotTransport` that does nothing. Needed only to fill the
     /// `Controller::Bot` variant for `t_player`. Not used in any test.
     struct NoopBot;
+
     #[async_trait::async_trait]
     impl BotTransport for NoopBot {
         fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
@@ -395,7 +388,7 @@ mod test {
     fn apply_horizontal_input_shifts_piece(#[case] dx: i8) {
         let mut p = t_player();
         let original = p.current.pos;
-        assert!(apply_horizontal_input(&mut p, dx));
+        assert!(apply_horizontal_input(&mut p, dx, GameTime::ZERO));
         assert_eq!(p.current.pos, original + v2![dx, 0]);
     }
 
@@ -404,28 +397,17 @@ mod test {
         let mut p = t_player();
         p.current.pos = v2![0, 18];
         let original = p.current.pos;
-        assert!(!apply_horizontal_input(&mut p, -1));
+        assert!(!apply_horizontal_input(&mut p, -1, GameTime::ZERO));
         assert_eq!(p.current.pos, original);
     }
 
     #[rstest]
-    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
     fn apply_horizontal_input_restarts_lock_timer_on_success() {
-        // Set the lock timer to a moment long ago — it's about to fire.
-        // After a successful shift, the timer should be reset to "now".
         let mut p = t_player();
-        p.lock_grounded_at = Some(Instant::now() - Duration::from_secs(10));
-        assert!(apply_horizontal_input(&mut p, 1));
-        // The timer is now Some(very recent Instant). We can't pin the exact
-        // value, but it should be within a few seconds of "now".
-        let grounded_at = p
-            .lock_grounded_at
-            .expect("lock_grounded_at should be Some after successful shift");
-        let age = Instant::now().duration_since(grounded_at);
-        assert!(
-            age < Duration::from_secs(1),
-            "lock timer should be recent, was {age:?} ago"
-        );
+        p.lock_grounded_at = Some(GameTime::from_millis(100));
+        let now = GameTime::from_millis(200);
+        assert!(apply_horizontal_input(&mut p, 1, now));
+        assert_eq!(p.lock_grounded_at, Some(now));
     }
 
     // -------- apply_rotation_input --------
@@ -436,7 +418,8 @@ mod test {
         assert!(apply_rotation_input(
             &mut p,
             &Ruleset::guideline(),
-            Rotation::CW
+            Rotation::CW,
+            GameTime::ZERO
         ));
         assert_eq!(p.current.orientation, Orientation::East);
     }
@@ -480,45 +463,45 @@ mod test {
     #[rstest]
     fn cancel_pending_garbage_removes_whole_attack_when_small() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 0,
             delay_remaining: 5,
         });
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 2);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 1);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 1);
     }
 
     #[rstest]
     fn cancel_pending_garbage_truncates_last_attack() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 2);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 2);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 2);
     }
 
     #[rstest]
     fn cancel_pending_garbage_no_op_when_to_cancel_is_zero() {
         let mut p = t_player();
-        p.pending_garbage.push(PendingGarbage {
+        p.garbage.pending.push(PendingGarbage {
             count: 3,
             hole: 0,
             delay_remaining: 5,
         });
         cancel_pending_garbage(&mut p, 0);
-        assert_eq!(p.pending_garbage.len(), 1);
-        assert_eq!(p.pending_garbage[0].count, 3);
+        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending[0].count, 3);
     }
 
     // -------- spawn_next_piece --------
@@ -627,7 +610,7 @@ mod test {
         // Piece is grounded with timer set. After hold, the timer should
         // be cleared — the new piece hasn't been grounded yet.
         let mut p = t_player();
-        p.lock_grounded_at = Some(Instant::now());
+        p.lock_grounded_at = Some(GameTime::from_millis(100));
         try_hold(&mut p);
         assert!(p.lock_grounded_at.is_none());
     }
@@ -637,20 +620,20 @@ mod test {
     #[rstest]
     fn update_score_breaks_combo_on_no_clear() {
         let mut p = t_player();
-        p.combo = 3;
+        p.scoring.combo = 3;
         let result = TickResult {
             lines_cleared: 0,
             tspin: TSpinStatus::None,
             piece_locked: false,
         };
         update_score(&mut p, &result, &Ruleset::guideline());
-        assert_eq!(p.combo, -1);
+        assert_eq!(p.scoring.combo, -1);
     }
 
     #[rstest]
     fn update_score_breaks_combo_to_zero_on_first_clear() {
         let mut p = t_player();
-        p.combo = -1; // broken from last time
+        p.scoring.combo = -1; // broken from last time
         let result = TickResult {
             lines_cleared: 1,
             tspin: TSpinStatus::None,
@@ -660,28 +643,28 @@ mod test {
         // Doc says `combo += 1`; from -1 that gives 0. To reset to 1 instead,
         // the implementation needs `combo = combo.max(0) + 1`. Documenting
         // current behavior; can fix the doc + impl together later.
-        assert_eq!(p.combo, 0);
+        assert_eq!(p.scoring.combo, 0);
     }
 
     #[rstest]
     fn update_score_sets_b2b_on_difficult_clears() {
         let mut p = t_player();
-        p.b2b = true;
+        p.scoring.b2b = true;
         let result = TickResult {
             lines_cleared: 4,
             tspin: TSpinStatus::None,
             piece_locked: false,
         };
         update_score(&mut p, &result, &Ruleset::guideline());
-        assert!(p.b2b);
-        assert!(p.score >= 800 + 400); // quad + b2b bonus
+        assert!(p.scoring.b2b);
+        assert!(p.scoring.score >= 800 + 400); // quad + b2b bonus
     }
 
     // -------- detect_tspin --------
 
     /// Corners are at pos + (0,0), pos+(2,0), pos+(0,2), pos+(2,2). Indices
     /// 0..3 map to bottom-left, bottom-right, top-left, top-right.
-    fn block_corners(p: &mut Player<StubRng>, indices: &[usize]) {
+    fn block_corners(p: &mut Player, indices: &[usize]) {
         let pos = p.current.pos;
         let offsets = [v2![0, 0], v2![2, 0], v2![0, 2], v2![2, 2]];
         for &i in indices {

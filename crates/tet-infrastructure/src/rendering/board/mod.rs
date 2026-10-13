@@ -1,12 +1,12 @@
 //! Board rendering — outline, locked cells, grid lines.
 
-use crate::rendering::backend::canvas::Canvas;
-use crate::rendering::theme::Theme;
-use crate::rendering::viewport::Viewport;
-
 pub mod cells;
 pub mod grid;
 pub mod outline;
+
+use crate::rendering::backend::canvas::Canvas;
+use crate::rendering::theme::Theme;
+use crate::rendering::viewport::Viewport;
 
 /// Draw the playfield in this order (matches the previous inline
 /// `render_board`):

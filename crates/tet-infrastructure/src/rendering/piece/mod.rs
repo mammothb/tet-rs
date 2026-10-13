@@ -4,14 +4,14 @@
 // are lossless within piece-cell ranges).
 #![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 
+pub mod ghost;
+
 use tet_domain::Vec2;
 
 use crate::rendering::backend::canvas::{Canvas, PaletteKey};
 use crate::rendering::layout::PixelRect;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
-
-pub mod ghost;
 
 /// Render the active tetromino. If `ghost` is `Some`, also render
 /// the ghost piece at the projected landing position
@@ -48,11 +48,14 @@ fn draw_active(vp: &Viewport, canvas: &mut dyn Canvas) {
 #[allow(clippy::similar_names)]
 mod test {
     use super::*;
-    use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
-    use crate::rendering::viewport::Viewport;
     use rstest::rstest;
-    use tet_application::{GridStyle, Layout, Phase, Piece, PlayerSnapshot};
+
+    use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
+
+    use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
+    use crate::rendering::view::{GridStyle, Layout};
+    use crate::rendering::viewport::Viewport;
 
     fn test_setup() -> (PlayerSnapshot, Layout, Ruleset) {
         let ruleset = Ruleset::guideline();

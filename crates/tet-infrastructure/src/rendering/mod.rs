@@ -7,4 +7,5 @@ pub mod piece;
 pub mod piece_box;
 pub mod side_panel;
 pub mod theme;
+pub mod view;
 pub mod viewport;

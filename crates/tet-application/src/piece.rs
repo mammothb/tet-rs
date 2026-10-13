@@ -19,11 +19,10 @@ impl Piece {
     }
 
     /// World-space cells for collision / locking / rendering.
-    pub fn cells(&self) -> impl Iterator<Item = Vec2> + '_ {
-        self.kind
-            .coords(self.orientation)
-            .iter()
-            .map(move |&c| self.pos + c)
+    #[must_use]
+    pub fn cells(&self) -> [Vec2; 4] {
+        let coords = self.kind.coords(self.orientation);
+        std::array::from_fn(|i| self.pos + coords[i])
     }
 
     /// Translate the piece. Caller is responsible for collision checks.
@@ -68,7 +67,7 @@ mod test {
     #[rstest]
     fn cells_yields_four_world_positions() {
         let p = Piece::spawn(MinoType::T);
-        let cells: Vec<Vec2> = p.cells().collect();
+        let cells = p.cells();
         assert_eq!(cells.len(), 4);
         // First cell should equal pos + bbox-relative cell [0]
         let expected_first = p.pos + p.kind.coords(p.orientation)[0];

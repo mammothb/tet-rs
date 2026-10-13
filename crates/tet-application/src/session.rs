@@ -1,20 +1,18 @@
-use std::time::Instant;
+use tet_domain::{MinoType, Rotation, Ruleset, v2};
 
-use tet_domain::{MinoType, Rng, Rotation, Ruleset, v2};
-
-use crate::tick;
 use crate::{
     ATTACK_FOR_LINES, BotMove, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase, Piece, Player,
     PlayerSnapshot, TickResult,
 };
+use crate::{GameTime, tick};
 
-pub struct GameSession<R: Rng> {
-    pub players: Vec<Player<R>>,
+pub struct GameSession {
+    pub players: Vec<Player>,
     pub ruleset: Ruleset,
     pub frame: u64,
 }
 
-impl<R: Rng> GameSession<R> {
+impl GameSession {
     #[must_use]
     pub fn new(ruleset: Ruleset) -> Self {
         Self {
@@ -25,7 +23,7 @@ impl<R: Rng> GameSession<R> {
     }
 
     /// Add a player. Returns the player index used for `apply_*` and `snapshot`.
-    pub fn add_player(&mut self, player: Player<R>) -> usize {
+    pub fn add_player(&mut self, player: Player) -> usize {
         self.players.push(player);
         self.players.len() - 1
     }
@@ -33,7 +31,7 @@ impl<R: Rng> GameSession<R> {
     /// Advance the entire game by one frame. `now` is passed to each
     /// `Player::step_player` so per-player gravity clocks advance on the
     /// caller's wall-clock time.
-    pub fn step_frame(&mut self, now: Instant) {
+    pub fn step_frame(&mut self, now: GameTime) {
         self.frame += 1;
 
         let mut results = Vec::with_capacity(self.players.len());
@@ -45,10 +43,10 @@ impl<R: Rng> GameSession<R> {
 
             // 1. Decrement pending garbage delays; insert ready rows.
             let mut i = 0;
-            while i < player.pending_garbage.len() {
-                player.pending_garbage[i].delay_remaining -= 1;
-                if player.pending_garbage[i].delay_remaining == 0 {
-                    let a = player.pending_garbage.remove(i);
+            while i < player.garbage.pending.len() {
+                player.garbage.pending[i].delay_remaining -= 1;
+                if player.garbage.pending[i].delay_remaining == 0 {
+                    let a = player.garbage.pending.remove(i);
                     player.board.insert_garbage(a.count, a.hole);
                 } else {
                     i += 1;
@@ -69,7 +67,7 @@ impl<R: Rng> GameSession<R> {
     }
 
     /// Apply a discrete human input to one player.
-    pub fn apply_input(&mut self, idx: usize, input: Input) -> Option<TickResult> {
+    pub fn apply_input(&mut self, idx: usize, input: Input, now: GameTime) -> Option<TickResult> {
         if self.players[idx].phase != Phase::Playing {
             return None;
         }
@@ -77,19 +75,29 @@ impl<R: Rng> GameSession<R> {
         match input {
             Input::None => None,
             Input::MoveLeft => {
-                tick::apply_horizontal_input(&mut self.players[idx], -1);
+                tick::apply_horizontal_input(&mut self.players[idx], -1, now);
                 None
             }
             Input::MoveRight => {
-                tick::apply_horizontal_input(&mut self.players[idx], 1);
+                tick::apply_horizontal_input(&mut self.players[idx], 1, now);
                 None
             }
             Input::RotateCW => {
-                tick::apply_rotation_input(&mut self.players[idx], &self.ruleset, Rotation::CW);
+                tick::apply_rotation_input(
+                    &mut self.players[idx],
+                    &self.ruleset,
+                    Rotation::CW,
+                    now,
+                );
                 None
             }
             Input::RotateCCW => {
-                tick::apply_rotation_input(&mut self.players[idx], &self.ruleset, Rotation::CCW);
+                tick::apply_rotation_input(
+                    &mut self.players[idx],
+                    &self.ruleset,
+                    Rotation::CCW,
+                    now,
+                );
                 None
             }
             Input::SoftDrop => {
@@ -116,11 +124,11 @@ impl<R: Rng> GameSession<R> {
             board: p.board.clone(),
             queue: p.queue.peek().to_vec(),
             hold: p.hold,
-            combo: p.combo,
-            b2b: p.b2b,
+            combo: p.scoring.combo,
+            b2b: p.scoring.b2b,
             current: p.current,
             phase: p.phase,
-            pending_garbage: p.pending_garbage.clone(),
+            pending_garbage: p.garbage.pending.clone(),
         }
     }
 
@@ -139,7 +147,7 @@ impl<R: Rng> GameSession<R> {
             if count == 0 {
                 continue;
             }
-            let hole = u8::try_from(self.players[idx].attack_rng.next_u32() % num_cols)
+            let hole = u8::try_from(self.players[idx].garbage.attack_rng.next_u32() % num_cols)
                 .expect("hole column fits in u8");
             let atk = PendingGarbage {
                 count,
@@ -153,16 +161,12 @@ impl<R: Rng> GameSession<R> {
             }
         }
         for (opp, atk) in pending {
-            self.players[opp].pending_garbage.push(atk);
+            self.players[opp].garbage.pending.push(atk);
         }
     }
 }
 
-pub fn apply_bot_move<R: Rng>(
-    player: &mut Player<R>,
-    mv: BotMove,
-    ruleset: &Ruleset,
-) -> Option<Piece> {
+pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
     // 1. Convert TBP true-rotation-center → bbox-anchor position.
     //    `MinoType::tbp_center_for` is a static lookup in the domain.
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
@@ -176,10 +180,7 @@ pub fn apply_bot_move<R: Rng>(
     // 2. No rotation: just check the position.
     if target == curr_orient {
         player.current.pos = pos;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             return Some(player.current);
         }
         player.current.orientation = orig_orient;
@@ -202,10 +203,7 @@ pub fn apply_bot_move<R: Rng>(
     for kick in kicks {
         player.current.orientation = target;
         player.current.pos = pos + *kick;
-        if !player
-            .board
-            .collides(&player.current.cells().collect::<Vec<_>>())
-        {
+        if !player.board.collides(&player.current.cells()) {
             return Some(player.current);
         }
     }
@@ -220,16 +218,13 @@ pub fn apply_bot_move<R: Rng>(
 mod test {
     use super::*;
 
-    use std::time::Instant;
-
     use rstest::rstest;
-    use tet_domain::{Board, Cell, MinoType, Orientation, Queue};
+    use tet_domain::{Board, Cell, MinoType, Orientation, Queue, Rng};
 
-    use crate::PendingGarbage;
-    use crate::TSpinStatus;
-    use crate::player::{Controller, Player};
+    use crate::player::{Controller, GarbageState, Player, ScoreState};
     use crate::ports::bot::BotTransport;
     use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
+    use crate::{PendingGarbage, TSpinStatus};
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
     struct StubRng {
@@ -254,7 +249,7 @@ mod test {
         }
     }
 
-    impl<R: Rng> GameSession<R> {
+    impl GameSession {
         /// Drive a bot synchronously: take snapshot, ask transport for moves,
         /// apply first valid one. Test-only — doesn't exist in release builds.
         ///
@@ -340,27 +335,26 @@ mod test {
         }
     }
 
-    fn empty_player() -> Player<StubRng> {
+    fn empty_player() -> Player {
         Player {
             board: Board::new(10, 25),
             current: Piece::spawn(MinoType::T),
-            queue: Queue::new(StubRng::counter(), 5),
+            queue: Queue::new(Box::new(StubRng::counter()), 5),
             hold: None,
             hold_used: false,
-            score: 0,
-            lines: 0,
-            combo: 0,
-            b2b: false,
+            scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
             controller: Controller::Bot(Box::new(StubBot::empty())),
-            pending_garbage: Vec::new(),
-            attack_rng: StubRng::counter(),
-            last_gravity_at: Instant::now(),
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng: Box::new(StubRng::counter()),
+            },
+            last_gravity_at: GameTime::ZERO,
         }
     }
 
-    fn t_session() -> GameSession<StubRng> {
+    fn t_session() -> GameSession {
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(empty_player());
         session
@@ -370,14 +364,14 @@ mod test {
 
     #[rstest]
     fn new_session_has_no_players_and_zero_frame() {
-        let session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        let session: GameSession = GameSession::new(Ruleset::guideline());
         assert_eq!(session.players.len(), 0);
         assert_eq!(session.frame, 0);
     }
 
     #[rstest]
     fn add_player_returns_sequential_indices() {
-        let mut session: GameSession<StubRng> = GameSession::new(Ruleset::guideline());
+        let mut session: GameSession = GameSession::new(Ruleset::guideline());
         assert_eq!(session.add_player(empty_player()), 0);
         assert_eq!(session.add_player(empty_player()), 1);
         assert_eq!(session.add_player(empty_player()), 2);
@@ -388,9 +382,9 @@ mod test {
     fn step_frame_increments_frame_counter() {
         let mut session = t_session();
         assert_eq!(session.frame, 0);
-        session.step_frame(Instant::now());
+        session.step_frame(GameTime::from_millis(16));
         assert_eq!(session.frame, 1);
-        session.step_frame(Instant::now());
+        session.step_frame(GameTime::from_millis(32));
         assert_eq!(session.frame, 2);
     }
 
@@ -399,27 +393,27 @@ mod test {
     #[rstest]
     fn step_frame_decrements_pending_garbage_delay() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 5,
             delay_remaining: 5,
         });
-        session.step_frame(Instant::now());
-        assert_eq!(session.players[0].pending_garbage[0].delay_remaining, 4);
-        assert_eq!(session.players[0].pending_garbage.len(), 1);
+        session.step_frame(GameTime::from_millis(16));
+        assert_eq!(session.players[0].garbage.pending[0].delay_remaining, 4);
+        assert_eq!(session.players[0].garbage.pending.len(), 1);
     }
 
     #[rstest]
     fn step_frame_inserts_garbage_when_delay_hits_zero() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
             delay_remaining: 1,
         });
-        session.step_frame(Instant::now());
+        session.step_frame(GameTime::from_millis(16));
         // Pending drained
-        assert!(session.players[0].pending_garbage.is_empty());
+        assert!(session.players[0].garbage.pending.is_empty());
         // Board has garbage with hole at col 0
         assert_eq!(session.players[0].board.get(v2![0, 0]), Cell::Empty);
         assert_eq!(session.players[0].board.get(v2![1, 0]), Cell::Garbage);
@@ -433,21 +427,18 @@ mod test {
         session.players[0].current.pos = v2![3, -1];
         // No time has elapsed, so the lock timer should be set to `now`
         // (just grounded). It shouldn't fire yet (elapsed < LOCK_DELAY_MS).
-        let before = Instant::now();
-        session.step_frame(before);
+        session.step_frame(GameTime::from_millis(100));
         assert!(session.players[0].lock_grounded_at.is_some());
     }
 
     #[rstest]
-    #[allow(clippy::unchecked_time_subtraction)] // we anchor the timer in the past
     fn step_frame_locks_piece_after_lock_delay_elapses() {
         let mut session = t_session();
         // Place piece on the floor so it can't fall.
         session.players[0].current.pos = v2![3, -1];
-        // Anchor the timer 550ms in the past so the lock delay has elapsed.
-        session.players[0].lock_grounded_at =
-            Some(Instant::now() - std::time::Duration::from_millis(550));
-        session.step_frame(Instant::now());
+        // Anchor the timer at t=100, step at t=650 (500ms elapsed > 500ms lock delay).
+        session.players[0].lock_grounded_at = Some(GameTime::from_millis(100));
+        session.step_frame(GameTime::from_millis(650));
         // After lock + spawn, the piece's lock timer is reset to None
         // (next piece hasn't been grounded yet).
         assert!(
@@ -461,7 +452,7 @@ mod test {
         let mut session = t_session();
         session.players[0].phase = Phase::GameOver;
         let initial_frame = session.frame;
-        session.step_frame(Instant::now());
+        session.step_frame(GameTime::from_millis(16));
         assert_eq!(session.frame, initial_frame + 1);
         // Player's lock_grounded_at was None; stays None (skipped).
         assert!(session.players[0].lock_grounded_at.is_none());
@@ -472,8 +463,8 @@ mod test {
     #[rstest]
     fn snapshot_captures_combo_and_b2b() {
         let mut session = t_session();
-        session.players[0].combo = 3;
-        session.players[0].b2b = true;
+        session.players[0].scoring.combo = 3;
+        session.players[0].scoring.b2b = true;
         let snap = session.snapshot(0);
         assert_eq!(snap.combo, 3);
         assert!(snap.b2b);
@@ -492,7 +483,7 @@ mod test {
     #[rstest]
     fn snapshot_captures_pending_garbage() {
         let mut session = t_session();
-        session.players[0].pending_garbage.push(PendingGarbage {
+        session.players[0].garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 7,
             delay_remaining: 6,
@@ -545,8 +536,8 @@ mod test {
             },
         ];
         session.distribute_garbage(&results);
-        assert!(session.players[0].pending_garbage.is_empty());
-        assert!(session.players[1].pending_garbage.is_empty());
+        assert!(session.players[0].garbage.pending.is_empty());
+        assert!(session.players[1].garbage.pending.is_empty());
     }
 
     #[rstest]
@@ -571,16 +562,16 @@ mod test {
             session.distribute_garbage(&results);
             if expected_rows == 0 {
                 assert!(
-                    session.players[1].pending_garbage.is_empty(),
+                    session.players[1].garbage.pending.is_empty(),
                     "lines={lines} should send 0 rows"
                 );
             } else {
                 assert_eq!(
-                    session.players[1].pending_garbage.len(),
+                    session.players[1].garbage.pending.len(),
                     1,
                     "lines={lines} should send {expected_rows} rows"
                 );
-                assert_eq!(session.players[1].pending_garbage[0].count, expected_rows);
+                assert_eq!(session.players[1].garbage.pending[0].count, expected_rows);
             }
         }
     }
@@ -604,8 +595,8 @@ mod test {
             },
         ];
         session.distribute_garbage(&results);
-        assert_eq!(session.players[0].pending_garbage.len(), 0); // attacker
-        assert_eq!(session.players[1].pending_garbage.len(), 1); // opponent
+        assert_eq!(session.players[0].garbage.pending.len(), 0); // attacker
+        assert_eq!(session.players[1].garbage.pending.len(), 1); // opponent
     }
 
     #[rstest]
@@ -633,11 +624,11 @@ mod test {
         ];
         session.distribute_garbage(&results);
         // p0 receives from p1
-        assert_eq!(session.players[0].pending_garbage.len(), 1);
+        assert_eq!(session.players[0].garbage.pending.len(), 1);
         // p1 receives from p0
-        assert_eq!(session.players[1].pending_garbage.len(), 1);
+        assert_eq!(session.players[1].garbage.pending.len(), 1);
         // p2 receives from both p0 and p1
-        assert_eq!(session.players[2].pending_garbage.len(), 2);
+        assert_eq!(session.players[2].garbage.pending.len(), 2);
     }
 
     #[rstest]
@@ -659,7 +650,7 @@ mod test {
         ];
         session.distribute_garbage(&results);
         assert_eq!(
-            session.players[1].pending_garbage[0].delay_remaining,
+            session.players[1].garbage.pending[0].delay_remaining,
             GARBAGE_DELAY_FRAMES
         );
     }
@@ -668,15 +659,15 @@ mod test {
     fn distribute_garbage_hole_uses_attacker_rng() {
         let mut p0 = empty_player();
         // Force attack_rng to return a specific value.
-        p0.attack_rng = StubRng {
+        p0.garbage.attack_rng = Box::new(StubRng {
             values: vec![42],
             idx: 0,
-        };
+        });
         let mut p1 = empty_player();
-        p1.attack_rng = StubRng {
+        p1.garbage.attack_rng = Box::new(StubRng {
             values: vec![7],
             idx: 0,
-        };
+        });
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(p0);
         session.add_player(p1);
@@ -694,9 +685,9 @@ mod test {
         ];
         session.distribute_garbage(&results);
         // p0's attack_rng returned 42 → 42 % 10 = 2 (sent to p1)
-        assert_eq!(session.players[1].pending_garbage[0].hole, 2);
+        assert_eq!(session.players[1].garbage.pending[0].hole, 2);
         // p1's attack_rng returned 7 → 7 % 10 = 7 (sent to p0)
-        assert_eq!(session.players[0].pending_garbage[0].hole, 7);
+        assert_eq!(session.players[0].garbage.pending[0].hole, 7);
     }
 
     // -------- apply_input --------
@@ -705,7 +696,7 @@ mod test {
     fn apply_input_none_returns_none_and_no_change() {
         let mut session = t_session();
         let original_pos = session.players[0].current.pos;
-        let result = session.apply_input(0, Input::None);
+        let result = session.apply_input(0, Input::None, GameTime::ZERO);
         assert!(result.is_none());
         assert_eq!(session.players[0].current.pos, original_pos);
     }
@@ -714,7 +705,7 @@ mod test {
     fn apply_input_move_left_shifts_piece_left() {
         let mut session = t_session();
         let original_pos = session.players[0].current.pos;
-        let result = session.apply_input(0, Input::MoveLeft);
+        let result = session.apply_input(0, Input::MoveLeft, GameTime::ZERO);
         assert!(result.is_none());
         assert_eq!(session.players[0].current.pos, original_pos + v2![-1, 0]);
     }
@@ -722,7 +713,7 @@ mod test {
     #[rstest]
     fn apply_input_rotate_cw_advances_orientation() {
         let mut session = t_session();
-        let _ = session.apply_input(0, Input::RotateCW);
+        let _ = session.apply_input(0, Input::RotateCW, GameTime::ZERO);
         assert_eq!(session.players[0].current.orientation, Orientation::East);
     }
 
@@ -730,7 +721,7 @@ mod test {
     fn apply_input_move_right_shifts_piece_right() {
         let mut session = t_session();
         let original_pos = session.players[0].current.pos;
-        let result = session.apply_input(0, Input::MoveRight);
+        let result = session.apply_input(0, Input::MoveRight, GameTime::ZERO);
         assert!(result.is_none());
         assert_eq!(session.players[0].current.pos, original_pos + v2![1, 0]);
     }
@@ -738,7 +729,7 @@ mod test {
     #[rstest]
     fn apply_input_rotate_ccw_retreats_orientation() {
         let mut session = t_session();
-        let _ = session.apply_input(0, Input::RotateCCW);
+        let _ = session.apply_input(0, Input::RotateCCW, GameTime::ZERO);
         assert_eq!(session.players[0].current.orientation, Orientation::West);
     }
 
@@ -746,7 +737,7 @@ mod test {
     fn apply_input_soft_drop_moves_piece_down() {
         let mut session = t_session();
         let original_pos = session.players[0].current.pos;
-        let result = session.apply_input(0, Input::SoftDrop);
+        let result = session.apply_input(0, Input::SoftDrop, GameTime::ZERO);
         assert!(result.is_none());
         assert_eq!(session.players[0].current.pos, original_pos + v2![0, -1]);
     }
@@ -755,7 +746,7 @@ mod test {
     fn apply_input_hold_with_empty_hold_pulls_from_queue() {
         let mut session = t_session();
         assert!(session.players[0].hold.is_none());
-        let result = session.apply_input(0, Input::Hold);
+        let result = session.apply_input(0, Input::Hold, GameTime::ZERO);
         assert!(result.is_none());
         assert!(session.players[0].hold.is_some());
         assert!(session.players[0].hold_used);
@@ -765,7 +756,7 @@ mod test {
     fn apply_input_hold_fails_when_already_used() {
         let mut session = t_session();
         session.players[0].hold_used = true;
-        let result = session.apply_input(0, Input::Hold);
+        let result = session.apply_input(0, Input::Hold, GameTime::ZERO);
         assert!(result.is_none());
         // hold stays empty — try_hold returns false on already-used
         assert!(session.players[0].hold.is_none());
@@ -774,7 +765,7 @@ mod test {
     #[rstest]
     fn apply_input_hard_drop_returns_some_with_piece_locked() {
         let mut session = t_session();
-        let result = session.apply_input(0, Input::HardDrop);
+        let result = session.apply_input(0, Input::HardDrop, GameTime::ZERO);
         assert!(result.is_some());
         let result = result.unwrap();
         assert!(result.piece_locked);
@@ -784,7 +775,7 @@ mod test {
     fn apply_input_on_game_over_player_returns_none() {
         let mut session = t_session();
         session.players[0].phase = Phase::GameOver;
-        let result = session.apply_input(0, Input::MoveLeft);
+        let result = session.apply_input(0, Input::MoveLeft, GameTime::ZERO);
         assert!(result.is_none());
     }
 

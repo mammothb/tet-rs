@@ -30,8 +30,10 @@
     clippy::cast_precision_loss
 )]
 
-use tet_application::{Layout, PlayerSnapshot};
+use tet_application::PlayerSnapshot;
 use tet_domain::Ruleset;
+
+use crate::rendering::view::Layout;
 
 /// Domain Y (0 = bottom, growing up) → screen row offset from the top
 /// of a region of the given height, in cells.
@@ -133,8 +135,10 @@ mod test {
     use super::*;
     use rstest::{fixture, rstest};
 
-    use tet_application::{Layout, Phase, Piece, PlayerSnapshot};
+    use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
+
+    use crate::rendering::view::Layout;
 
     // ---- fixtures ----
     //

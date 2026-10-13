@@ -40,8 +40,9 @@
     clippy::cast_precision_loss
 )]
 
-use tet_application::Layout;
 use tet_domain::Ruleset;
+
+use crate::rendering::view::Layout;
 
 /// Integer-pixel rectangle. All four are physical pixel positions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,8 +157,10 @@ pub fn plan_box(pos: (f32, f32), size_phys: i32, dpi: f32) -> BoxLayout {
 mod test {
     use super::*;
     use rstest::{fixture, rstest};
-    use tet_application::{Layout, PlayerView};
+
     use tet_domain::Ruleset;
+
+    use crate::rendering::view::{Layout, PlayerView};
 
     /// Test DPI helpers. All return `f32`, so they can't be `#[fixture]`
     /// functions (multiple `f32`-returning fixtures are ambiguous in rstest).

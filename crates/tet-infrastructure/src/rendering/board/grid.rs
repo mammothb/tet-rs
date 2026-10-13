@@ -20,11 +20,10 @@
 //! The framebuffer byte each layer writes is identical to the
 //! previous macroquad draw (verified by `theme::palette_from_f32`).
 
-use tet_application::GridStyle;
-
 use crate::rendering::backend::canvas::{Canvas, PaletteKey};
 use crate::rendering::layout::plan_board;
 use crate::rendering::theme::Theme;
+use crate::rendering::view::GridStyle;
 use crate::rendering::viewport::Viewport;
 
 /// Faint base lines + corner-cross gradient, gated by
@@ -120,10 +119,11 @@ mod test {
     use super::*;
     use rstest::rstest;
 
-    use tet_application::{Layout, Phase, Piece, PlayerSnapshot};
+    use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
 
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
+    use crate::rendering::view::{GridStyle, Layout};
 
     /// Build the inputs that `grid::draw` consumes. Origin at
     /// `(0, 0)` so pixel positions are predictable in assertions.

@@ -6,4 +6,5 @@ pub use bot::tbp_proto::codec;
 pub use bot::tbp_proto::mapper;
 pub use bot::tbp_proto::subprocess::{BotInfo, BotSubprocess};
 pub use rendering::backend::macroquad::MacroquadRenderer;
+pub use rendering::view::{Frame, GridStyle, Layout, PlayerView};
 pub use rng::SmallRng;

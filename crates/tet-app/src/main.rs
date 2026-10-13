@@ -1,14 +1,14 @@
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
 mod bot_worker;
 mod timer;
 
 use std::time::Instant;
 
 use macroquad::prelude::*;
-use tet_application::{
-    Frame, GameSession, Layout, Player, PlayerSnapshot, PlayerView, Renderer, session,
-};
-use tet_domain::{Rng, Ruleset, Vec2};
-use tet_infrastructure::{MacroquadRenderer, SmallRng};
+use tet_application::{GameSession, GameTime, Player, session, tick};
+use tet_domain::Ruleset;
+use tet_infrastructure::{Frame, Layout, MacroquadRenderer, PlayerView, SmallRng};
 use tokio::sync::oneshot;
 
 use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
@@ -32,25 +32,23 @@ fn collect_input_state() -> InputState {
 ///
 /// Single-player for now: one view, positioned at (16, 16) with the
 /// standard guideline layout. Multi-player is a separate concern.
-fn assemble_frame<R: Rng>(session: &GameSession<R>, human_idx: usize) -> Frame {
+fn assemble_frame(session: &GameSession, human_idx: usize) -> Frame {
     let mut views = Vec::with_capacity(session.players.len());
     let base_layout = Layout::default();
     // Origin starts AFTER the hold box on the left, so the hold box fits
     // on screen without overlapping the board.
     let (ox, oy) = (16.0 + base_layout.hold_box_width(), 16.0);
-    #[allow(clippy::cast_precision_loss)]
     let x_spacing = base_layout.board_w(session.ruleset.num_cols) + 80.0;
 
     for i in 0..session.players.len() {
         let snapshot = session.snapshot(i);
         let layout = Layout {
-            #[allow(clippy::cast_precision_loss)]
             origin: (ox + i as f32 * x_spacing, oy),
             ..base_layout
         };
         let label = if i == human_idx { "human" } else { "bot" };
         let ghost = if matches!(snapshot.phase, tet_application::Phase::Playing) {
-            Some(ghost_position_from_snapshot(&snapshot))
+            Some(tick::project_ghost_pos(&snapshot.board, snapshot.current))
         } else {
             None
         };
@@ -69,26 +67,6 @@ fn assemble_frame<R: Rng>(session: &GameSession<R>, human_idx: usize) -> Frame {
     }
 }
 
-/// Compute the landing position from a snapshot. Iterates downward until
-/// the piece would collide with the board; returns the last valid `y`.
-fn ghost_position_from_snapshot(snapshot: &PlayerSnapshot) -> Vec2 {
-    let pos = snapshot.current.pos;
-    let mut y = pos.y;
-    loop {
-        let next_y = y - 1;
-        let candidate = Vec2::new(pos.x, next_y);
-        let cells: Vec<Vec2> = snapshot
-            .current
-            .cells()
-            .map(|c| Vec2::new(c.x, c.y + (next_y - pos.y)))
-            .collect();
-        if snapshot.board.collides(&cells) {
-            return Vec2::new(pos.x, y);
-        }
-        y = candidate.y;
-    }
-}
-
 #[macroquad::main("tet-rs")]
 async fn main() {
     let _runtime = tokio::runtime::Builder::new_multi_thread()
@@ -98,14 +76,16 @@ async fn main() {
         .expect("build tokio runtime");
 
     let ruleset = Ruleset::guideline();
-    let mut session = GameSession::<SmallRng>::new(ruleset);
+    let mut session = GameSession::new(ruleset);
     let (_, queue_rng) = SmallRng::new(None);
     let (_, attack_rng) = SmallRng::new(None);
-    let human_idx = session.add_player(Player::new_human(queue_rng, attack_rng));
+    let human_idx =
+        session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
     let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
     let mut timer = Timer::new();
+    let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
     // Init tracing so we can see what values the renderer is computing.
@@ -135,15 +115,16 @@ async fn main() {
         // Timer translates keyboard state into inputs.
         let input_state = collect_input_state();
         let tick = timer.tick(input_state, frame_delta_ms);
+        let now = GameTime::from_millis(game_start.elapsed().as_millis() as u64);
 
         // Apply timer-emitted inputs to the human only.
         for input in tick.inputs {
-            session.apply_input(human_idx, input);
+            session.apply_input(human_idx, input, now);
         }
 
         // Frame tick: garbage arrival, per-player game state (including
         // gravity timing), line-clear distribution.
-        session.step_frame(Instant::now());
+        session.step_frame(now);
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {
