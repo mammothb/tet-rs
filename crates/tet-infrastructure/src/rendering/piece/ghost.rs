@@ -39,7 +39,7 @@ pub fn draw(vp: &Viewport, theme: &Theme, ghost_pos: Vec2, canvas: &mut dyn Canv
         }
         let (x_phys, y_phys) = vp.cell_pixel(cell_col, cell_domain_row);
         let rect = PixelRect::new(x_phys, y_phys, cw, cw);
-        canvas.draw_cell_sprite(rect, Cell::Block(kind), theme.ghost.alpha);
+        canvas.draw_cell_sprite(rect, Cell::Block(kind), theme.ghost_alpha);
     }
 }
 

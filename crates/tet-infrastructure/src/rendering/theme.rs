@@ -95,7 +95,7 @@ pub struct Theme {
     /// overlaid per-layer at draw time; the stored value is the max.
     pub grid_cross: Palette,
     /// Ghost piece fill (semi-transparent).
-    pub ghost: Palette,
+    pub ghost_alpha: u8,
     /// HUD text color.
     pub text: Palette,
     pub pieces: PiecePalette,
@@ -103,55 +103,28 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Default theme. Values transcribed from the original module-level
-    /// constants in `macroquad.rs` (which this theme is intended to
-    /// replace). Each field's source is documented inline so the byte
-    /// mapping is traceable.
+    /// Default theme.
     pub const DARK: Self = Self {
-        // clear_background(BLACK) → Color::new(0.0, 0.0, 0.0, 1.0).
         background: Palette::rgb(0, 0, 0),
-        // STRUCTURE_COLOR was Color::new(80.0/255.0, 80.0/255.0, 80.0/255.0, 1.0).
         structure: Palette::rgb(80, 80, 80),
-        // GRID_BASE_COLOR was Color::new(20.0/255.0, ..., 1.0).
         grid_base: Palette::rgb(20, 20, 20),
-        // GRID was Color::new(60.0/255.0, ..., 1.0). Alpha is overridden
-        // per-layer in render_board.
         grid_cross: Palette::rgb(60, 60, 60),
-        // GHOST_COLOR was Color::new(1.0, 1.0, 1.0, 0.25).
-        // 0.25 * 255 = 63.75 → rounds to 64.
-        ghost: Palette::rgba(255, 255, 255, 128),
-        // TEXT_COLOR was `WHITE` = Color::new(1.0, 1.0, 1.0, 1.0).
+        ghost_alpha: 128,
         text: Palette::rgb(255, 255, 255),
-        // piece_color() values, rounded to nearest u8 from the original
-        // f32 literals. Rounding matches what `palette_from_f32` does in
-        // the test module — the bytes are byte-for-byte identical to the
-        // rendered framebuffer bytes produced by the macroquad source.
         pieces: PiecePalette {
-            // I: Color::new(0.0, 0.85, 0.85, 1.0) → (0, 217, 217, 255).
             i: Palette::rgb(0, 217, 217),
-            // O: Color::new(0.95, 0.85, 0.0, 1.0) → (242, 217, 0, 255).
             o: Palette::rgb(242, 217, 0),
-            // T: Color::new(0.55, 0.0, 0.55, 1.0) → (140, 0, 140, 255).
             t: Palette::rgb(140, 0, 140),
-            // S: Color::new(0.0, 0.85, 0.0, 1.0) → (0, 217, 0, 255).
             s: Palette::rgb(0, 217, 0),
-            // Z: Color::new(0.85, 0.0, 0.0, 1.0) → (217, 0, 0, 255).
             z: Palette::rgb(217, 0, 0),
-            // J: Color::new(0.0, 0.0, 0.85, 1.0) → (0, 0, 217, 255).
             j: Palette::rgb(0, 0, 217),
-            // L: Color::new(0.95, 0.55, 0.0, 1.0) → (242, 140, 0, 255).
             l: Palette::rgb(242, 140, 0),
         },
         hud: HudMetrics {
-            // HUD_FONT_SIZE = 18.0
             font_size_px: 18.0,
-            // LABEL_PADDING = 0.0
             label_padding_px: 0.0,
-            // HOLD_BOX_CELLS = 4
             hold_box_cells: 4,
-            // QUEUE_PREVIEW_CELL_PX = 16.0
             queue_preview_cell_px: 16.0,
-            // QUEUE_PREVIEW_SPACING = 4.0
             queue_preview_spacing_px: 4.0,
         },
     };
@@ -184,21 +157,13 @@ mod test {
     }
 
     // ---- palette colors ----
-    //
-    // Each `Theme::DARK` palette field matches its source macroquad
-    // literal (`Color::new(...)` in `macroquad.rs`). Source f32 values
-    // stay as `#[case(...)]` arguments so the byte mapping remains
-    // traceable — if a future change to the macroquad constant isn't
-    // reflected in `Theme::DARK`, the failing `#[case::*]` name names
-    // exactly which field drifted.
 
     #[rstest]
-    #[case::structure(Theme::DARK.structure, 80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0)] // STRUCTURE_COLOR
-    #[case::grid_base(Theme::DARK.grid_base, 20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0)] // GRID_BASE_COLOR
-    #[case::grid_cross(Theme::DARK.grid_cross, 60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0)] // GRID (alpha overridden per-layer at draw)
-    #[case::ghost(Theme::DARK.ghost, 1.0, 1.0, 1.0, 0.5)] // GHOST_COLOR
-    #[case::text(Theme::DARK.text, 1.0,1.0, 1.0, 1.0)] // TEXT_COLOR = WHITE
-    #[case::background(Theme::DARK.background, 0.0, 0.0, 0.0, 1.0)] // clear_background(BLACK)
+    #[case::structure(Theme::DARK.structure, 80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0)]
+    #[case::grid_base(Theme::DARK.grid_base, 20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0)]
+    #[case::grid_cross(Theme::DARK.grid_cross, 60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0)]
+    #[case::text(Theme::DARK.text, 1.0,1.0, 1.0, 1.0)]
+    #[case::background(Theme::DARK.background, 0.0, 0.0, 0.0, 1.0)]
     fn dark_palette_field_matches_source_macroquad_color(
         #[case] actual: Palette,
         #[case] r: f32,

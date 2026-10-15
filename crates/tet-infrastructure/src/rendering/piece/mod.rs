@@ -141,7 +141,7 @@ mod test {
         assert_eq!(opaque.len(), 4, "4 active CellSprite calls");
         assert_eq!(translucent.len(), 4, "4 ghost CellSprite calls");
         for (_, _, a) in &translucent {
-            assert_eq!(*a, Theme::DARK.ghost.alpha, "ghost alpha matches theme");
+            assert_eq!(*a, Theme::DARK.ghost_alpha, "ghost alpha matches theme");
         }
     }
 

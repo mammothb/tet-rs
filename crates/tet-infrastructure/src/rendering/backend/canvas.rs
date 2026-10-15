@@ -75,8 +75,6 @@ pub enum PaletteKey {
     /// Brighter grid corner cross. The inner `u8` is the alpha
     /// (`0..=255`); the underlying RGB is fixed by the backend.
     GridCross(u8),
-    /// Ghost piece fill.
-    Ghost,
     /// HUD text color.
     Text,
     /// Tetromino-specific palette.

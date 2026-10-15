@@ -179,7 +179,6 @@ impl MacroquadCanvas {
                     f32::from(alpha) / 255.0,
                 )
             }
-            PaletteKey::Ghost => palette_to_color(self.theme.ghost),
             PaletteKey::Text => palette_to_color(self.theme.text),
             PaletteKey::Piece(t) => palette_to_color(self.theme.pieces.get(t)),
         }
