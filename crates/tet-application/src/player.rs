@@ -1,8 +1,10 @@
 use tet_domain::{Board, MinoType, Queue, Rng, Ruleset};
 
+use crate::constants::{GRAVITY_MS, LOCK_DELAY_MS};
+use crate::piece::Piece;
 use crate::ports::bot::BotTransport;
-use crate::tick::{TSpinStatus, post_lock, step_gravity, try_lock};
-use crate::{GRAVITY_MS, GameTime, LOCK_DELAY_MS, Piece, TickResult};
+use crate::tick::{TSpinStatus, TickResult, post_lock, step_gravity, try_lock};
+use crate::time::GameTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {

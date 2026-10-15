@@ -11,7 +11,7 @@ use tet_application::ports::bot::{BotMove, BotPieceLocation, BotSpin};
 use tet_application::{BotError, PlayerSnapshot};
 use tet_domain::{Cell, MinoType, Orientation};
 
-use crate::codec::{
+use crate::bot::tbp_proto::codec::{
     Error as TbpError, ErrorCause, MaybeUnknown, Move as TbpMove, Orientation as TbpOrientation,
     Piece as TbpPiece, PieceLocation as TbpPieceLocation, Spin as TbpSpin, Start as TbpStart,
 };
@@ -301,15 +301,11 @@ mod test {
     //!   we don't exhaustively cover every enum variant — the matches are static).
 
     use super::*;
-    use crate::codec::{
-        Error as TbpError, ErrorCause, MaybeUnknown, Move as TbpMove,
-        Orientation as TbpOrientation, Piece as TbpPiece, PieceLocation as TbpPieceLocation,
-        Spin as TbpSpin,
-    };
+
     use rstest::rstest;
     use serde_json::json;
-    use tet_application::ports::bot::{BotMove, BotPieceLocation, BotSpin};
-    use tet_application::{Phase, Piece, PlayerSnapshot};
+
+    use tet_application::{BotMove, BotPieceLocation, BotSpin, Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, Cell, Vec2};
 
     // ============ Test fixtures ============

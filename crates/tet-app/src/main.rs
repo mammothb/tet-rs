@@ -9,8 +9,7 @@ use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
 use tet_infrastructure::{
-    Frame, Layout, MacroquadRenderer, PlayerView, SmallRng,
-    rendering::{backend::macroquad::MacroquadCanvas, font::Fonts, theme::Theme},
+    Fonts, Frame, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng, Theme,
 };
 use tokio::sync::oneshot;
 

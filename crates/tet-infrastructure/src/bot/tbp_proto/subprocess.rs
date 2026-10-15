@@ -8,8 +8,8 @@ use tet_domain::Ruleset;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use crate::codec::{BotMessage, FrontendMessage, Rules};
-use crate::mapper;
+use crate::bot::tbp_proto::codec::{BotMessage, FrontendMessage, Rules, Suggest};
+use crate::bot::tbp_proto::mapper;
 
 pub struct BotSubprocess {
     child: Child,
@@ -173,7 +173,7 @@ impl BotTransport for BotSubprocess {
     }
 
     async fn suggest(&mut self) -> Result<Vec<BotMove>, BotError> {
-        self.send(&FrontendMessage::Suggest(crate::codec::Suggest::default()))
+        self.send(&FrontendMessage::Suggest(Suggest::default()))
             .await?;
         match self.recv().await? {
             BotMessage::Suggestion(s) => s.moves.into_iter().map(mapper::tbp_move_to_bot).collect(),
