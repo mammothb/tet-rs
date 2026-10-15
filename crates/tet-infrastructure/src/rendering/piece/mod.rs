@@ -50,7 +50,6 @@ mod test {
     use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
 
-    use crate::rendering::backend::canvas::PaletteKey;
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
     use crate::rendering::view::{GridStyle, Layout};
     use crate::rendering::viewport::Viewport;
@@ -84,33 +83,37 @@ mod test {
         (snapshot, layout, ruleset)
     }
 
-    /// Without a ghost, the active piece emits one `FillRect` per
+    /// Without a ghost, the active piece emits one `CellSprite` per
     /// visible cell — 4 cells for the I-spawn. All carry
-    /// [`PaletteKey::Piece(MinoType::I)`].
+    /// [`Cell::Block(MinoType::I)`].
     #[test]
-    fn active_piece_records_four_fills() {
+    fn active_piece_records_four_sprites() {
         let (snapshot, layout, ruleset) = test_setup();
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
         let mut canvas = RecordingCanvas::default();
         super::draw(&vp, &Theme::DARK, None, &mut canvas);
 
-        let fills: Vec<_> = canvas
+        let sprites: Vec<_> = canvas
             .calls
             .iter()
             .filter_map(|op| match op {
-                DrawOp::FillRect { rect, fill } => Some((*rect, *fill)),
+                DrawOp::CellSprite { rect, cell } => Some((*rect, *cell)),
                 _ => None,
             })
             .collect();
-        assert_eq!(fills.len(), 4, "expected 4 FillRect calls, got {fills:?}");
-        for (_, fill) in &fills {
-            assert!(matches!(fill, PaletteKey::Piece(MinoType::I)));
+        assert_eq!(
+            sprites.len(),
+            4,
+            "expected 4 CellSprite calls, got {sprites:?}"
+        );
+        for (_, sprite) in &sprites {
+            assert!(matches!(sprite, Cell::Block(MinoType::I)));
         }
     }
 
     /// With a ghost at the floor (pos.y=0), `pos_offset_y` = -17 for
     /// the I-spawn at pos=(3,17). All 4 ghost cells land inside
-    /// the visible window. Active piece emits 4 fills; ghost emits
+    /// the visible window. Active piece emits 4 `CellSprite`; ghost emits
     /// 4 fills + 4 outline strokes.
     #[test]
     fn piece_with_ghost_records_ghost_fill_and_outline() {
@@ -122,6 +125,11 @@ mod test {
         let ghost_pos = Vec2::new(current_pos.x, 0);
         super::draw(&vp, &Theme::DARK, Some(ghost_pos), &mut canvas);
 
+        let sprite_count = canvas
+            .calls
+            .iter()
+            .filter(|op| matches!(op, DrawOp::CellSprite { .. }))
+            .count();
         let fill_count = canvas
             .calls
             .iter()
@@ -133,7 +141,8 @@ mod test {
             .filter(|op| matches!(op, DrawOp::StrokeRect { .. }))
             .count();
 
-        assert_eq!(fill_count, 8, "4 active + 4 ghost fills");
+        assert_eq!(sprite_count, 4, "4 active CellSprite calls");
+        assert_eq!(fill_count, 4, "4 ghost fills");
         assert_eq!(stroke_count, 4, "4 ghost outlines");
     }
 
