@@ -40,7 +40,7 @@ pub trait Canvas {
     /// the loaded sprite sheet. `Cell::Empty` is unreachable, callers skips
     /// empty cells before drawing. Implementations without a sprite sheet fall
     /// back to `fill_rect` with the appropriate palette color.
-    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell);
+    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell, alpha: u8);
 
     /// Fill an opaque rectangle.
     fn fill_rect(&mut self, rect: PixelRect, fill: PaletteKey);
@@ -108,6 +108,7 @@ pub mod mock {
         CellSprite {
             rect: PixelRect,
             cell: Cell,
+            alpha: u8,
         },
         FillRect {
             rect: PixelRect,
@@ -150,8 +151,8 @@ pub mod mock {
             self.calls.push(DrawOp::Clear(fill));
         }
 
-        fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell) {
-            self.calls.push(DrawOp::CellSprite { rect, cell });
+        fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell, alpha: u8) {
+            self.calls.push(DrawOp::CellSprite { rect, cell, alpha });
         }
 
         fn fill_rect(&mut self, rect: PixelRect, fill: PaletteKey) {

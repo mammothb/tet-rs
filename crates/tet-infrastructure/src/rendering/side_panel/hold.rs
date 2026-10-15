@@ -49,7 +49,7 @@ pub fn draw(vp: &Viewport, theme: &Theme, canvas: &mut dyn Canvas) {
         piece_cell,
         theme.hud.hold_box_cells,
         |rect| {
-            canvas.draw_cell_sprite(rect, Cell::Block(kind));
+            canvas.draw_cell_sprite(rect, Cell::Block(kind), 255);
         },
     );
 }

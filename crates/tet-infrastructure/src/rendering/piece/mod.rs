@@ -37,7 +37,11 @@ fn draw_active(vp: &Viewport, canvas: &mut dyn Canvas) {
             continue;
         }
         let (x_phys, y_phys) = vp.cell_pixel(col, domain_row);
-        canvas.draw_cell_sprite(PixelRect::new(x_phys, y_phys, cw, cw), Cell::Block(kind));
+        canvas.draw_cell_sprite(
+            PixelRect::new(x_phys, y_phys, cw, cw),
+            Cell::Block(kind),
+            255,
+        );
     }
 }
 

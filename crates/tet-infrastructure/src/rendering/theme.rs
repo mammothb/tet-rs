@@ -119,7 +119,7 @@ impl Theme {
         grid_cross: Palette::rgb(60, 60, 60),
         // GHOST_COLOR was Color::new(1.0, 1.0, 1.0, 0.25).
         // 0.25 * 255 = 63.75 → rounds to 64.
-        ghost: Palette::rgba(255, 255, 255, 64),
+        ghost: Palette::rgba(255, 255, 255, 128),
         // TEXT_COLOR was `WHITE` = Color::new(1.0, 1.0, 1.0, 1.0).
         text: Palette::rgb(255, 255, 255),
         // piece_color() values, rounded to nearest u8 from the original

@@ -23,7 +23,7 @@ pub fn draw_locked(vp: &Viewport, _theme: &Theme, canvas: &mut dyn Canvas) {
             let rect = PixelRect::new(x_phys, y_phys, cw, cw);
             match cell {
                 Cell::Empty => {}
-                _ => canvas.draw_cell_sprite(rect, *cell),
+                _ => canvas.draw_cell_sprite(rect, *cell, 255),
             }
         }
     }

@@ -215,27 +215,35 @@ impl Canvas for MacroquadCanvas {
         clear_background(self.color(fill));
     }
 
-    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell) {
-        match &self.sprite_sheet {
-            Some(sheet) => {
-                let src = sheet.source_rect(cell);
-                draw_texture_ex(
-                    &sheet.texture,
-                    rect.x as f32,
-                    rect.y as f32,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(vec2(rect.w as f32, rect.h as f32)),
-                        source: Some(src),
-                        ..Default::default()
-                    },
-                );
-            }
-            None => match cell {
-                Cell::Block(kind) => self.fill_rect(rect, PaletteKey::Piece(kind)),
-                Cell::Garbage => self.fill_rect(rect, PaletteKey::Structure),
+    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell, alpha: u8) {
+        if let Some(sheet) = &self.sprite_sheet {
+            let src = sheet.source_rect(cell);
+            let tint = Color::new(1.0, 1.0, 1.0, f32::from(alpha) / 255.0);
+            draw_texture_ex(
+                &sheet.texture,
+                rect.x as f32,
+                rect.y as f32,
+                tint,
+                DrawTextureParams {
+                    dest_size: Some(vec2(rect.w as f32, rect.h as f32)),
+                    source: Some(src),
+                    ..Default::default()
+                },
+            );
+        } else {
+            let color = match cell {
+                Cell::Block(kind) => self.color(PaletteKey::Piece(kind)),
+                Cell::Garbage => self.color(PaletteKey::Structure),
                 Cell::Empty => unreachable!("empty cells are never drawn"),
-            },
+            };
+            let color = Color::new(color.r, color.g, color.b, f32::from(alpha) / 255.0);
+            draw_rectangle(
+                rect.x as f32,
+                rect.y as f32,
+                rect.w as f32,
+                rect.h as f32,
+                color,
+            );
         }
     }
 
