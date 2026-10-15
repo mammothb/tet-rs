@@ -5,7 +5,7 @@
 
 use tet_domain::Cell;
 
-use crate::rendering::backend::canvas::{Canvas, PaletteKey};
+use crate::rendering::backend::canvas::Canvas;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
@@ -23,12 +23,7 @@ pub fn draw_locked(vp: &Viewport, _theme: &Theme, canvas: &mut dyn Canvas) {
             let rect = PixelRect::new(x_phys, y_phys, cw, cw);
             match cell {
                 Cell::Empty => {}
-                Cell::Block(t) => {
-                    canvas.fill_rect(rect, PaletteKey::Piece(*t));
-                }
-                Cell::Garbage => {
-                    canvas.fill_rect(rect, PaletteKey::Structure);
-                }
+                _ => canvas.draw_cell_sprite(rect, *cell),
             }
         }
     }

@@ -6,9 +6,9 @@
 
 pub mod ghost;
 
-use tet_domain::Vec2;
+use tet_domain::{Cell, Vec2};
 
-use crate::rendering::backend::canvas::{Canvas, PaletteKey};
+use crate::rendering::backend::canvas::Canvas;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
@@ -37,10 +37,7 @@ fn draw_active(vp: &Viewport, canvas: &mut dyn Canvas) {
             continue;
         }
         let (x_phys, y_phys) = vp.cell_pixel(col, domain_row);
-        canvas.fill_rect(
-            PixelRect::new(x_phys, y_phys, cw, cw),
-            PaletteKey::Piece(kind),
-        );
+        canvas.draw_cell_sprite(PixelRect::new(x_phys, y_phys, cw, cw), Cell::Block(kind));
     }
 }
 
@@ -53,6 +50,7 @@ mod test {
     use tet_application::{Phase, Piece, PlayerSnapshot};
     use tet_domain::{Board, MinoType, Ruleset};
 
+    use crate::rendering::backend::canvas::PaletteKey;
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
     use crate::rendering::view::{GridStyle, Layout};
     use crate::rendering::viewport::Viewport;

@@ -1,6 +1,8 @@
 //! Queue preview panel — right of the playfield. Renders up to
 //! `Ruleset::num_preview` pieces, vertically stacked.
 
+use tet_domain::Cell;
+
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
 use crate::rendering::layout::PixelRect;
 use crate::rendering::side_panel::for_each_piece_cell;
@@ -50,7 +52,7 @@ pub fn draw(vp: &Viewport, theme: &Theme, canvas: &mut dyn Canvas) {
             piece_cell,
             theme.hud.hold_box_cells,
             |rect| {
-                canvas.fill_rect(rect, PaletteKey::Piece(kind));
+                canvas.draw_cell_sprite(rect, Cell::Block(kind));
             },
         );
     }

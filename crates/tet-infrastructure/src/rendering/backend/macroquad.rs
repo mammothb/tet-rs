@@ -41,14 +41,17 @@
     clippy::similar_names
 )]
 
+use std::path::Path;
+
 use macroquad::prelude::*;
-use tet_domain::Ruleset;
+use tet_domain::{Cell, Ruleset};
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};
 use crate::rendering::font::Fonts;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::piece;
 use crate::rendering::side_panel;
+use crate::rendering::sprite_sheet::SpriteSheet;
 use crate::rendering::theme::{Palette, Theme};
 use crate::rendering::view::{Frame, PlayerView};
 use crate::rendering::viewport::Viewport;
@@ -80,9 +83,7 @@ impl MacroquadRenderer {
     /// Panics if the embedded TTF bytes are malformed. The shipped bytes
     /// are well-formed so this should not happen in practice.
     #[must_use]
-    pub fn new() -> Self {
-        let fonts = Fonts::load().expect("Fira Code fonts are embedded in the binary");
-        let canvas = MacroquadCanvas::new(Theme::DARK, fonts);
+    pub fn new(canvas: MacroquadCanvas) -> Self {
         Self {
             dpi_scale: screen_dpi_scale(),
             canvas,
@@ -95,12 +96,6 @@ impl MacroquadRenderer {
         for view in &frame.views {
             render_view(view, &frame.ruleset, self.dpi_scale, &mut self.canvas);
         }
-    }
-}
-
-impl Default for MacroquadRenderer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -148,14 +143,23 @@ fn palette_to_color(p: Palette) -> Color {
 pub struct MacroquadCanvas {
     theme: Theme,
     fonts: Fonts,
+    sprite_sheet: Option<SpriteSheet>,
 }
 
 impl MacroquadCanvas {
     /// Construct a canvas backed by the given theme and pre-loaded
     /// fonts.
     #[must_use]
-    pub fn new(theme: Theme, fonts: Fonts) -> Self {
-        Self { theme, fonts }
+    pub async fn new(theme: Theme, fonts: Fonts, skin_path: Option<&Path>) -> Self {
+        let sprite_sheet = match skin_path {
+            Some(path) => SpriteSheet::load(path).await,
+            None => None,
+        };
+        Self {
+            theme,
+            fonts,
+            sprite_sheet,
+        }
     }
 
     /// Resolve a [`PaletteKey`] to a concrete [`Color`] using the
@@ -209,6 +213,30 @@ impl MacroquadCanvas {
 impl Canvas for MacroquadCanvas {
     fn clear(&mut self, fill: PaletteKey) {
         clear_background(self.color(fill));
+    }
+
+    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell) {
+        match &self.sprite_sheet {
+            Some(sheet) => {
+                let src = sheet.source_rect(cell);
+                draw_texture_ex(
+                    &sheet.texture,
+                    rect.x as f32,
+                    rect.y as f32,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(vec2(rect.w as f32, rect.h as f32)),
+                        source: Some(src),
+                        ..Default::default()
+                    },
+                );
+            }
+            None => match cell {
+                Cell::Block(kind) => self.fill_rect(rect, PaletteKey::Piece(kind)),
+                Cell::Garbage => self.fill_rect(rect, PaletteKey::Structure),
+                Cell::Empty => unreachable!("empty cells are never drawn"),
+            },
+        }
     }
 
     fn fill_rect(&mut self, rect: PixelRect, fill: PaletteKey) {
