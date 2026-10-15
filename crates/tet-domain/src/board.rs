@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::VecDeque;
 
-use crate::{Cell, Vec2};
+use crate::spatial::{Cell, Vec2};
 
 #[derive(Clone)]
 pub struct Board {
@@ -138,9 +138,9 @@ impl Board {
 mod test {
     use super::*;
 
-    use crate::MinoType;
-
     use rstest::rstest;
+
+    use crate::mino::MinoType;
 
     fn empty_board(cols: u8, rows: u8) -> Board {
         Board {

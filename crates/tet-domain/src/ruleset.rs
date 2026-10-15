@@ -1,4 +1,6 @@
-use crate::{MinoType, Orientation, Rotation, Vec2, mino::Mino};
+use crate::mino::{Mino, MinoType};
+use crate::orientation::Orientation;
+use crate::spatial::{Rotation, Vec2};
 
 #[derive(Debug, Clone)]
 pub struct Ruleset {
