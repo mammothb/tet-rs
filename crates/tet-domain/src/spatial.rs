@@ -1,6 +1,6 @@
 use std::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
-use crate::MinoType;
+use crate::mino::MinoType;
 
 #[macro_export]
 macro_rules! v2 {
@@ -114,8 +114,10 @@ impl Neg for Rotation {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::MinoType;
+
     use rstest::rstest;
+
+    use crate::MinoType;
 
     // -------- Vec2 --------
 

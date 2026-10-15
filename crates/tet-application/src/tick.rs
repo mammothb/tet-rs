@@ -1,6 +1,8 @@
 use tet_domain::{Board, Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
-use crate::{GameTime, Phase, Piece, Player};
+use crate::piece::Piece;
+use crate::player::{Phase, Player};
+use crate::time::GameTime;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum TSpinStatus {
@@ -271,10 +273,9 @@ mod test {
     use super::*;
 
     use rstest::rstest;
-
     use tet_domain::{Board, Queue, Rng};
 
-    use crate::player::{Controller, GarbageState, PendingGarbage, Player, ScoreState};
+    use crate::player::{Controller, GarbageState, PendingGarbage, ScoreState};
     use crate::ports::bot::{BotError, BotMove, BotTransport};
     use crate::snapshot::PlayerSnapshot;
 

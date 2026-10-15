@@ -1,8 +1,8 @@
 //! Ghost piece: landing-position math and outline rendering.
 
-use tet_domain::Vec2;
+use tet_domain::{Cell, Vec2};
 
-use crate::rendering::backend::canvas::{Canvas, PaletteKey};
+use crate::rendering::backend::canvas::Canvas;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;
@@ -23,7 +23,7 @@ pub fn offset(current: Vec2, ghost: Vec2) -> (i32, i32) {
 /// The ghost has a translucent [`PaletteKey::Ghost`] fill plus an
 /// opaque outline in the active piece's [`PaletteKey::Piece(kind)`]
 /// color. Cells outside the visible row range are skipped.
-pub fn draw(vp: &Viewport, _theme: &Theme, ghost_pos: Vec2, canvas: &mut dyn Canvas) {
+pub fn draw(vp: &Viewport, theme: &Theme, ghost_pos: Vec2, canvas: &mut dyn Canvas) {
     let kind = vp.snapshot().current.kind;
     let cur_pos = vp.snapshot().current.pos;
     let pos_offset_x = i32::from(ghost_pos.x) - i32::from(cur_pos.x);
@@ -39,8 +39,7 @@ pub fn draw(vp: &Viewport, _theme: &Theme, ghost_pos: Vec2, canvas: &mut dyn Can
         }
         let (x_phys, y_phys) = vp.cell_pixel(cell_col, cell_domain_row);
         let rect = PixelRect::new(x_phys, y_phys, cw, cw);
-        canvas.fill_rect(rect, PaletteKey::Ghost);
-        canvas.stroke_rect(rect, PaletteKey::Piece(kind));
+        canvas.draw_cell_sprite(rect, Cell::Block(kind), theme.ghost_alpha);
     }
 }
 

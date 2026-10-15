@@ -1,10 +1,13 @@
 use tet_domain::{MinoType, Rotation, Ruleset, v2};
 
-use crate::{
-    ATTACK_FOR_LINES, BotMove, GARBAGE_DELAY_FRAMES, Input, PendingGarbage, Phase, Piece, Player,
-    PlayerSnapshot, TickResult,
-};
-use crate::{GameTime, tick};
+use crate::constants::{ATTACK_FOR_LINES, GARBAGE_DELAY_FRAMES};
+use crate::piece::Piece;
+use crate::player::{PendingGarbage, Phase, Player};
+use crate::ports::bot::BotMove;
+use crate::ports::input::Input;
+use crate::snapshot::PlayerSnapshot;
+use crate::tick::{self, TickResult};
+use crate::time::GameTime;
 
 pub struct GameSession {
     pub players: Vec<Player>,
@@ -222,9 +225,8 @@ mod test {
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue, Rng};
 
     use crate::player::{Controller, GarbageState, Player, ScoreState};
-    use crate::ports::bot::BotTransport;
-    use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin};
-    use crate::{PendingGarbage, TSpinStatus};
+    use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
+    use crate::tick::TSpinStatus;
 
     /// Deterministic RNG that cycles through 1..=1000. Same as bag.rs / tick.rs.
     struct StubRng {

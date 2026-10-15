@@ -3,12 +3,14 @@
 mod bot_worker;
 mod timer;
 
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
-use tet_infrastructure::{Frame, Layout, MacroquadRenderer, PlayerView, SmallRng};
+use tet_infrastructure::{
+    Fonts, Frame, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng, Theme,
+};
 use tokio::sync::oneshot;
 
 use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
@@ -96,7 +98,14 @@ async fn main() {
         )
         .with_target(true)
         .init();
-    let mut renderer = MacroquadRenderer::new();
+    let fonts = Fonts::load().expect("Fira Code fonts are embedded in the binary");
+    let canvas = MacroquadCanvas::new(
+        Theme::DARK,
+        fonts,
+        Some(Path::new("assets/skins/default.png")),
+    )
+    .await;
+    let mut renderer = MacroquadRenderer::new(canvas);
 
     loop {
         let frame_delta_ms = last_frame_at.elapsed().as_secs_f32() * 1000.0;

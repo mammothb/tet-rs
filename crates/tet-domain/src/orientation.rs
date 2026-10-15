@@ -1,4 +1,4 @@
-use crate::Rotation;
+use crate::spatial::Rotation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -29,7 +29,6 @@ impl Orientation {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Rotation;
 
     use rstest::rstest;
 

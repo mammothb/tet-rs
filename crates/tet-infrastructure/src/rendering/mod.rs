@@ -6,6 +6,7 @@ pub mod layout;
 pub mod piece;
 pub mod piece_box;
 pub mod side_panel;
+pub mod sprite_sheet;
 pub mod theme;
 pub mod view;
 pub mod viewport;

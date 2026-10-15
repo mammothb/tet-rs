@@ -1,4 +1,6 @@
-use crate::{Orientation, Rotation, Vec2, v2};
+use crate::orientation::Orientation;
+use crate::spatial::{Rotation, Vec2};
+use crate::v2;
 
 pub type KickTable = [&'static [Vec2]; 4];
 

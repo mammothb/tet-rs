@@ -24,7 +24,7 @@
 //! `render_board`'s 4-layer cross). Packaging alpha in the key
 //! avoids adding an `alpha: u8` parameter on every line-draw call.
 
-use tet_domain::MinoType;
+use tet_domain::{Cell, MinoType};
 
 use crate::rendering::layout::PixelRect;
 
@@ -35,6 +35,12 @@ use crate::rendering::layout::PixelRect;
 pub trait Canvas {
     /// Clear the whole framebuffer with the given palette.
     fn clear(&mut self, fill: PaletteKey);
+
+    /// Draw a piece cell sprite at `rect`. `cell` selects the source tile from
+    /// the loaded sprite sheet. `Cell::Empty` is unreachable, callers skips
+    /// empty cells before drawing. Implementations without a sprite sheet fall
+    /// back to `fill_rect` with the appropriate palette color.
+    fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell, alpha: u8);
 
     /// Fill an opaque rectangle.
     fn fill_rect(&mut self, rect: PixelRect, fill: PaletteKey);
@@ -69,8 +75,6 @@ pub enum PaletteKey {
     /// Brighter grid corner cross. The inner `u8` is the alpha
     /// (`0..=255`); the underlying RGB is fixed by the backend.
     GridCross(u8),
-    /// Ghost piece fill.
-    Ghost,
     /// HUD text color.
     Text,
     /// Tetromino-specific palette.
@@ -99,6 +103,11 @@ pub mod mock {
     #[derive(Clone, Debug, PartialEq)]
     pub enum DrawOp {
         Clear(PaletteKey),
+        CellSprite {
+            rect: PixelRect,
+            cell: Cell,
+            alpha: u8,
+        },
         FillRect {
             rect: PixelRect,
             fill: PaletteKey,
@@ -138,6 +147,10 @@ pub mod mock {
     impl Canvas for RecordingCanvas {
         fn clear(&mut self, fill: PaletteKey) {
             self.calls.push(DrawOp::Clear(fill));
+        }
+
+        fn draw_cell_sprite(&mut self, rect: PixelRect, cell: Cell, alpha: u8) {
+            self.calls.push(DrawOp::CellSprite { rect, cell, alpha });
         }
 
         fn fill_rect(&mut self, rect: PixelRect, fill: PaletteKey) {

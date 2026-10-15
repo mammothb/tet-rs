@@ -2,8 +2,7 @@
 //! `include_bytes!` so the binary is self-contained — no runtime file
 //! loading.
 
-use macroquad::prelude::Font;
-use macroquad::text::load_ttf_font_from_bytes;
+use macroquad::text::{Font, load_ttf_font_from_bytes};
 
 /// Regular weight Fira Code (400). Used for general HUD text.
 const FIRA_REGULAR: &[u8] = include_bytes!("../../../../assets/fonts/FiraCode-Regular.ttf");

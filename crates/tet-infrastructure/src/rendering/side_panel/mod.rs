@@ -61,9 +61,8 @@ mod test {
     use super::*;
 
     use tet_application::{Phase, Piece, PlayerSnapshot};
-    use tet_domain::{Board, MinoType, Ruleset};
+    use tet_domain::{Board, Cell, MinoType, Ruleset};
 
-    use crate::rendering::backend::canvas::PaletteKey;
     use crate::rendering::backend::canvas::mock::{DrawOp, RecordingCanvas};
     use crate::rendering::view::{GridStyle, Layout};
 
@@ -228,24 +227,24 @@ mod test {
 
         hold::draw(&vp, &Theme::DARK, &mut canvas);
 
-        let fills: Vec<_> = canvas
+        let sprites: Vec<_> = canvas
             .calls
             .iter()
             .filter_map(|op| match op {
-                DrawOp::FillRect { rect, fill } => Some((*rect, *fill)),
+                DrawOp::CellSprite { rect, cell, alpha } => Some((*rect, *cell, *alpha)),
                 _ => None,
             })
             .collect();
 
-        // Outline + label = no fills. 4 piece fills from PieceBox.
-        assert_eq!(fills.len(), 4);
-        for (rect, fill) in &fills {
+        // Outline + label = no sprites. 4 piece sprites from PieceBox.
+        assert_eq!(sprites.len(), 4);
+        for (rect, sprite, _) in &sprites {
             assert_eq!(
                 rect.w, 24,
                 "piece cell width = cw (= box_size / hold_box_cells)"
             );
             assert_eq!(rect.h, 24, "piece cell height");
-            assert!(matches!(fill, PaletteKey::Piece(MinoType::I)));
+            assert!(matches!(sprite, Cell::Block(MinoType::I)));
             // I-piece local y=2, screen row = box_cells - 1 - 2 = 1,
             // so rect.y = 16 + 1 * 24 = 40.
             assert_eq!(rect.y, 40, "I-piece screen row 1 in the hold box");
