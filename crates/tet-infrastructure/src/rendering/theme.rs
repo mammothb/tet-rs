@@ -196,7 +196,7 @@ mod test {
     #[case::structure(Theme::DARK.structure, 80.0 / 255.0, 80.0 / 255.0, 80.0 / 255.0, 1.0)] // STRUCTURE_COLOR
     #[case::grid_base(Theme::DARK.grid_base, 20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, 1.0)] // GRID_BASE_COLOR
     #[case::grid_cross(Theme::DARK.grid_cross, 60.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0)] // GRID (alpha overridden per-layer at draw)
-    #[case::ghost(Theme::DARK.ghost, 1.0, 1.0, 1.0, 0.25)] // GHOST_COLOR
+    #[case::ghost(Theme::DARK.ghost, 1.0, 1.0, 1.0, 0.5)] // GHOST_COLOR
     #[case::text(Theme::DARK.text, 1.0,1.0, 1.0, 1.0)] // TEXT_COLOR = WHITE
     #[case::background(Theme::DARK.background, 0.0, 0.0, 0.0, 1.0)] // clear_background(BLACK)
     fn dark_palette_field_matches_source_macroquad_color(

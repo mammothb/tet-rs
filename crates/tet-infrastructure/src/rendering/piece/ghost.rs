@@ -2,7 +2,7 @@
 
 use tet_domain::{Cell, Vec2};
 
-use crate::rendering::backend::canvas::{Canvas, PaletteKey};
+use crate::rendering::backend::canvas::Canvas;
 use crate::rendering::layout::PixelRect;
 use crate::rendering::theme::Theme;
 use crate::rendering::viewport::Viewport;

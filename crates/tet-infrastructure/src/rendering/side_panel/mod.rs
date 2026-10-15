@@ -231,14 +231,14 @@ mod test {
             .calls
             .iter()
             .filter_map(|op| match op {
-                DrawOp::CellSprite { rect, cell } => Some((*rect, *cell)),
+                DrawOp::CellSprite { rect, cell, alpha } => Some((*rect, *cell, *alpha)),
                 _ => None,
             })
             .collect();
 
         // Outline + label = no sprites. 4 piece sprites from PieceBox.
         assert_eq!(sprites.len(), 4);
-        for (rect, sprite) in &sprites {
+        for (rect, sprite, _) in &sprites {
             assert_eq!(
                 rect.w, 24,
                 "piece cell width = cw (= box_size / hold_box_cells)"

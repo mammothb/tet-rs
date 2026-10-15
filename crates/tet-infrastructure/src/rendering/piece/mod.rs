@@ -101,7 +101,7 @@ mod test {
             .calls
             .iter()
             .filter_map(|op| match op {
-                DrawOp::CellSprite { rect, cell } => Some((*rect, *cell)),
+                DrawOp::CellSprite { rect, cell, alpha } => Some((*rect, *cell, *alpha)),
                 _ => None,
             })
             .collect();
@@ -110,7 +110,7 @@ mod test {
             4,
             "expected 4 CellSprite calls, got {sprites:?}"
         );
-        for (_, sprite) in &sprites {
+        for (_, sprite, _) in &sprites {
             assert!(matches!(sprite, Cell::Block(MinoType::I)));
         }
     }
@@ -120,7 +120,7 @@ mod test {
     /// the visible window. Active piece emits 4 `CellSprite`; ghost emits
     /// 4 fills + 4 outline strokes.
     #[test]
-    fn piece_with_ghost_records_ghost_fill_and_outline() {
+    fn piece_with_ghost_records_transluscent_ghost_sprites() {
         let (snapshot, layout, ruleset) = test_setup();
         let vp = Viewport::new(&snapshot, &layout, &ruleset, 1.0);
         let mut canvas = RecordingCanvas::default();
@@ -129,25 +129,20 @@ mod test {
         let ghost_pos = Vec2::new(current_pos.x, 0);
         super::draw(&vp, &Theme::DARK, Some(ghost_pos), &mut canvas);
 
-        let sprite_count = canvas
+        let (opaque, translucent): (Vec<_>, Vec<_>) = canvas
             .calls
             .iter()
-            .filter(|op| matches!(op, DrawOp::CellSprite { .. }))
-            .count();
-        let fill_count = canvas
-            .calls
-            .iter()
-            .filter(|op| matches!(op, DrawOp::FillRect { .. }))
-            .count();
-        let stroke_count = canvas
-            .calls
-            .iter()
-            .filter(|op| matches!(op, DrawOp::StrokeRect { .. }))
-            .count();
+            .filter_map(|op| match op {
+                DrawOp::CellSprite { rect, cell, alpha } => Some((*rect, *cell, *alpha)),
+                _ => None,
+            })
+            .partition(|(_, _, a)| *a == 255);
 
-        assert_eq!(sprite_count, 4, "4 active CellSprite calls");
-        assert_eq!(fill_count, 4, "4 ghost fills");
-        assert_eq!(stroke_count, 4, "4 ghost outlines");
+        assert_eq!(opaque.len(), 4, "4 active CellSprite calls");
+        assert_eq!(translucent.len(), 4, "4 ghost CellSprite calls");
+        for (_, _, a) in &translucent {
+            assert_eq!(*a, Theme::DARK.ghost.alpha, "ghost alpha matches theme");
+        }
     }
 
     /// Without ghost, no `StrokeRect` calls happen.
