@@ -467,12 +467,12 @@ mod test {
         p.garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 0,
-            delay_remaining: 5,
+            arrives_at: GameTime::from_millis(100),
         });
         p.garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
-            delay_remaining: 5,
+            arrives_at: GameTime::from_millis(100),
         });
         cancel_pending_garbage(&mut p, 2);
         assert_eq!(p.garbage.pending.len(), 1);
@@ -485,7 +485,7 @@ mod test {
         p.garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 0,
-            delay_remaining: 5,
+            arrives_at: GameTime::from_millis(100),
         });
         cancel_pending_garbage(&mut p, 2);
         assert_eq!(p.garbage.pending.len(), 1);
@@ -498,7 +498,7 @@ mod test {
         p.garbage.pending.push(PendingGarbage {
             count: 3,
             hole: 0,
-            delay_remaining: 5,
+            arrives_at: GameTime::from_millis(100),
         });
         cancel_pending_garbage(&mut p, 0);
         assert_eq!(p.garbage.pending.len(), 1);

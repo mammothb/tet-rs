@@ -11,21 +11,7 @@
 //! input timing. The two never bleed into each other, which prevents the
 //! "soft drop coupling breaks gravity" class of bug.
 
-use std::time::Instant;
-
-use tet_application::{ARR_FRAMES, DAS_FRAMES, GRAVITY_MS, Input, SDF_FRAMES};
-
-/// Approximate ms per frame at 60fps. Used for converting frame-based constants
-/// (DAS, ARR) to milliseconds without pulling in `Instant`-based math at the
-/// call site.
-const MS_PER_FRAME: f32 = 1000.0 / 60.0;
-
-/// Lossless cast from a positive f32 to u32. Used for the `MS_PER_FRAME`
-/// constant, which is always a small positive value.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-const fn f32_to_u32(v: f32) -> u32 {
-    v as u32
-}
+use tet_application::{ARR_MS, DAS_MS, Input, SDF_INTERVAL_MS};
 
 /// Held-key state from the keyboard. Edge-triggered inputs are reported as
 /// "pressed this frame" (true for one frame only). Held inputs are reported as
@@ -58,12 +44,30 @@ pub struct TimerTick {
     pub inputs: Vec<Input>,
 }
 
-pub struct Timer {
-    /// `Some((direction, instant_of_first_shift))` once a horizontal key has
-    /// been held long enough to register the first shift. Reset on release.
-    last_shift_at: Option<(Direction, Instant)>,
-    /// Carry-over ms when ARR doesn't divide cleanly into the frame delta.
+struct DirState {
+    /// Accumulated ms since key was first pressed.
+    das_accumulator_ms: f32,
+    /// ARR accumulator (preserved while frozen).
     arr_accumulator_ms: f32,
+    /// Whether DAS has already charged
+    das_charged: bool,
+}
+
+impl DirState {
+    fn new() -> Self {
+        Self {
+            das_accumulator_ms: 0.0,
+            arr_accumulator_ms: 0.0,
+            das_charged: false,
+        }
+    }
+}
+
+pub struct Timer {
+    left: Option<DirState>,
+    right: Option<DirState>,
+    /// Which direction moved most recently (last key pressed).
+    active: Option<Direction>,
     /// Carry-over ms when `SDF_FRAMES` doesn't divide cleanly into the frame delta.
     soft_drop_accumulator_ms: f32,
 }
@@ -71,8 +75,9 @@ pub struct Timer {
 impl Timer {
     pub fn new() -> Self {
         Self {
-            last_shift_at: None,
-            arr_accumulator_ms: 0.0,
+            left: None,
+            right: None,
+            active: None,
             soft_drop_accumulator_ms: 0.0,
         }
     }
@@ -82,7 +87,6 @@ impl Timer {
     /// `frame_delta_ms`: time elapsed since the last call to `tick`. Used to
     /// accumulate partial ARR and soft-drop frames.
     pub fn tick(&mut self, state: InputState, frame_delta_ms: f32) -> TimerTick {
-        let now = Instant::now();
         let mut inputs = Vec::new();
 
         // 1. Edge-triggered inputs (independent of timer).
@@ -100,52 +104,74 @@ impl Timer {
         }
 
         // 2. DAS / ARR for held horizontal movement.
-        let held_dir = match (state.move_left_held, state.move_right_held) {
-            (true, false) => Some(Direction::Left),
-            (false, true) => Some(Direction::Right),
-            _ => None, // both or neither → no shift
-        };
+        let left_just_pressed = state.move_left_held && self.left.is_none();
+        let right_just_pressed = state.move_right_held && self.right.is_none();
 
-        if let Some(dir) = held_dir {
-            match self.last_shift_at {
-                None => {
-                    // First press (or direction switch): shift immediately,
-                    // start DAS countdown.
-                    inputs.push(dir.into_input());
-                    self.last_shift_at = Some((dir, now));
+        if left_just_pressed {
+            self.left = Some(DirState::new());
+            inputs.push(Input::MoveLeft);
+            self.active = Some(Direction::Left);
+        }
+        if right_just_pressed {
+            self.right = Some(DirState::new());
+            inputs.push(Input::MoveRight);
+            self.active = Some(Direction::Right);
+        }
+
+        if !state.move_left_held {
+            let was_active = self.active == Some(Direction::Left);
+            self.left = None;
+            if was_active {
+                self.active = if self.right.is_some() {
+                    Some(Direction::Right)
+                } else {
+                    None
+                };
+            }
+        }
+        if !state.move_right_held {
+            let was_active = self.active == Some(Direction::Right);
+            self.right = None;
+            if was_active {
+                self.active = if self.left.is_some() {
+                    Some(Direction::Left)
+                } else {
+                    None
+                };
+            }
+        }
+
+        if let Some(dir) = self.active {
+            let just_pressed = match dir {
+                Direction::Left => left_just_pressed,
+                Direction::Right => right_just_pressed,
+            };
+            if !just_pressed
+                && let Some(dir_state) = match dir {
+                    Direction::Left => self.left.as_mut(),
+                    Direction::Right => self.right.as_mut(),
                 }
-                Some((prev, _)) if prev != dir => {
-                    // Direction switched: shift and restart DAS.
-                    inputs.push(dir.into_input());
-                    self.last_shift_at = Some((dir, now));
-                }
-                Some((_, first_at)) => {
-                    // Same direction still held: check if we're past DAS delay.
-                    let held_ms = now.duration_since(first_at).as_millis();
-                    let das_ms =
-                        u128::from(u32::from(DAS_FRAMES)) * u128::from(f32_to_u32(MS_PER_FRAME));
-                    if held_ms >= das_ms {
-                        // In auto-repeat phase; accumulate partial ARR credits.
-                        self.arr_accumulator_ms += frame_delta_ms;
-                        let arr_ms = f32::from(ARR_FRAMES) * MS_PER_FRAME;
-                        while self.arr_accumulator_ms >= arr_ms {
-                            inputs.push(dir.into_input());
-                            self.arr_accumulator_ms -= arr_ms;
-                        }
+            {
+                if dir_state.das_charged {
+                    dir_state.arr_accumulator_ms += frame_delta_ms;
+                    let arr_ms = f32::from(ARR_MS);
+                    while dir_state.arr_accumulator_ms >= arr_ms {
+                        inputs.push(dir.into_input());
+                        dir_state.arr_accumulator_ms -= arr_ms;
+                    }
+                } else {
+                    dir_state.das_accumulator_ms += frame_delta_ms;
+                    if dir_state.das_accumulator_ms >= f32::from(DAS_MS) {
+                        dir_state.das_charged = true;
+                        inputs.push(dir.into_input());
                     }
                 }
             }
-        } else {
-            self.last_shift_at = None;
-            self.arr_accumulator_ms = 0.0;
         }
 
-        // 3. Soft drop. While held, fires at SDF cadence (every
-        //    `GRAVITY_MS / SDF_FRAMES` ms). With SDF=15, that's ~15 cells/sec
-        //    on top of the 1 cell/sec gravity from `Player::step_player`.
+        // 3. Soft drop.
         if state.soft_drop_held {
-            #[allow(clippy::cast_precision_loss)]
-            let sdf_interval_ms = GRAVITY_MS as f32 / f32::from(SDF_FRAMES);
+            let sdf_interval_ms = f32::from(SDF_INTERVAL_MS);
             self.soft_drop_accumulator_ms += frame_delta_ms;
             while self.soft_drop_accumulator_ms >= sdf_interval_ms {
                 inputs.push(Input::SoftDrop);
@@ -281,18 +307,6 @@ mod test {
     }
 
     #[rstest]
-    fn holding_both_directions_emits_no_shift() {
-        let mut timer = Timer::new();
-        let state = InputState {
-            move_left_held: true,
-            move_right_held: true,
-            ..no_input()
-        };
-        let tick = timer.tick(state, FRAME_MS);
-        assert!(tick.inputs.is_empty());
-    }
-
-    #[rstest]
     fn das_blocks_repeat_within_window() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -304,6 +318,146 @@ mod test {
             let tick = timer.tick(state, FRAME_MS);
             assert!(tick.inputs.is_empty());
         }
+    }
+
+    // -------- simultaneous hold (last key wins with revert) --------
+
+    #[rstest]
+    fn both_pressed_same_frame_right_wins() {
+        let mut timer = Timer::new();
+        let state = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let tick = timer.tick(state, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveLeft, Input::MoveRight]);
+        let tick = timer.tick(state, FRAME_MS);
+        assert!(tick.inputs.is_empty());
+    }
+
+    #[rstest]
+    fn holding_left_then_pressing_right_shifts_right() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+    }
+
+    #[rstest]
+    fn releasing_right_while_left_held_reverts_to_left() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(left, FRAME_MS);
+        assert!(tick.inputs.is_empty());
+    }
+
+    #[rstest]
+    fn revert_to_left_preserves_das_charge() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(left, 300.0);
+        assert!(
+            tick.inputs.contains(&Input::MoveLeft),
+            "left should has DAS-charged and emitted a shift"
+        );
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(left, 20.0);
+        let left_shifts = tick
+            .inputs
+            .iter()
+            .filter(|i| **i == Input::MoveLeft)
+            .count();
+        assert!(
+            left_shifts > 0,
+            "left should resume ARR after revert, got {left_shifts} shifts"
+        );
+    }
+
+    #[rstest]
+    fn release_both_simultaneously_clears_all_state() {
+        let mut timer = Timer::new();
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(no_input(), FRAME_MS);
+        assert!(tick.inputs.is_empty());
+
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let tick = timer.tick(left, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveLeft]);
+    }
+
+    #[rstest]
+    fn tap_right_while_holding_left_fires() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+    }
+
+    #[rstest]
+    fn soft_drop_still_fires_during_both_held() {
+        let mut timer = Timer::new();
+        let state = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            soft_drop_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(state, FRAME_MS);
+        let tick = timer.tick(state, 100.0);
+        assert!(
+            tick.inputs.contains(&Input::SoftDrop),
+            "soft drop should fire even with both directions held"
+        );
     }
 
     // -------- soft drop --------

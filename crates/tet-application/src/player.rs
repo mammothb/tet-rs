@@ -27,14 +27,12 @@ pub struct ScoreState {
 }
 
 /// Garbage that has been launched at this player but not yet inserted.
-/// `delay_remaining` counts down each frame; when it reaches 0, the rows are
-/// pushed onto the board. While in flight, the player can cancel rows by
-/// clearing lines.
+/// `arrives_at` is the `GameTime` at which the rows are pushed on to the board.
 #[derive(Clone, Copy)]
 pub struct PendingGarbage {
     pub count: u8,
     pub hole: u8,
-    pub delay_remaining: u8,
+    pub arrives_at: GameTime,
 }
 
 /// In-flight garbage queue and the RNG for attack hole column selection
