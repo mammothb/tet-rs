@@ -110,10 +110,10 @@ impl Timer {
                 Some((_, first_at)) => {
                     // Same direction still held: check if we're past DAS delay.
                     let held_ms = now.duration_since(first_at).as_millis();
-                    if held_ms >= DAS_MS as u128 {
+                    if held_ms >= u128::from(DAS_MS) {
                         // In auto-repeat phase; accumulate partial ARR credits.
                         self.arr_accumulator_ms += frame_delta_ms;
-                        let arr_ms = ARR_MS as f32;
+                        let arr_ms = f32::from(ARR_MS);
                         while self.arr_accumulator_ms >= arr_ms {
                             inputs.push(dir.into_input());
                             self.arr_accumulator_ms -= arr_ms;
@@ -128,8 +128,7 @@ impl Timer {
 
         // 3. Soft drop.
         if state.soft_drop_held {
-            #[allow(clippy::cast_precision_loss)]
-            let sdf_interval_ms = SDF_INTERVAL_MS as f32;
+            let sdf_interval_ms = f32::from(SDF_INTERVAL_MS);
             self.soft_drop_accumulator_ms += frame_delta_ms;
             while self.soft_drop_accumulator_ms >= sdf_interval_ms {
                 inputs.push(Input::SoftDrop);

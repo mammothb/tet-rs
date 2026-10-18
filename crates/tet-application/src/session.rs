@@ -154,7 +154,7 @@ impl GameSession {
             let atk = PendingGarbage {
                 count,
                 hole,
-                arrives_at: GameTime::from_millis(now.as_millis() + GARBAGE_DELAY_MS as u64),
+                arrives_at: GameTime::from_millis(now.as_millis() + u64::from(GARBAGE_DELAY_MS)),
             };
             for opp in 0..n {
                 if opp != idx {
@@ -397,22 +397,25 @@ mod test {
         session.players[0].garbage.pending.push(PendingGarbage {
             count: 2,
             hole: 5,
-            delay_remaining: 5,
+            arrives_at: GameTime::from_millis(100),
         });
         session.step_frame(GameTime::from_millis(16));
-        assert_eq!(session.players[0].garbage.pending[0].delay_remaining, 4);
+        assert_eq!(
+            session.players[0].garbage.pending[0].arrives_at,
+            GameTime::from_millis(100)
+        );
         assert_eq!(session.players[0].garbage.pending.len(), 1);
     }
 
     #[rstest]
-    fn step_frame_inserts_garbage_when_delay_hits_zero() {
+    fn step_frame_inserts_garbage_when_arrives_at_passes() {
         let mut session = t_session();
         session.players[0].garbage.pending.push(PendingGarbage {
             count: 1,
             hole: 0,
-            delay_remaining: 1,
+            arrives_at: GameTime::from_millis(100),
         });
-        session.step_frame(GameTime::from_millis(16));
+        session.step_frame(GameTime::from_millis(100));
         // Pending drained
         assert!(session.players[0].garbage.pending.is_empty());
         // Board has garbage with hole at col 0
@@ -487,13 +490,16 @@ mod test {
         session.players[0].garbage.pending.push(PendingGarbage {
             count: 4,
             hole: 7,
-            delay_remaining: 6,
+            arrives_at: GameTime::from_millis(100),
         });
         let snap = session.snapshot(0);
         assert_eq!(snap.pending_garbage.len(), 1);
         assert_eq!(snap.pending_garbage[0].count, 4);
         assert_eq!(snap.pending_garbage[0].hole, 7);
-        assert_eq!(snap.pending_garbage[0].delay_remaining, 6);
+        assert_eq!(
+            snap.pending_garbage[0].arrives_at,
+            GameTime::from_millis(100)
+        );
     }
 
     // -------- is_finished --------
@@ -536,7 +542,7 @@ mod test {
                 piece_locked: false,
             },
         ];
-        session.distribute_garbage(&results);
+        session.distribute_garbage(&results, GameTime::from_millis(100));
         assert!(session.players[0].garbage.pending.is_empty());
         assert!(session.players[1].garbage.pending.is_empty());
     }
@@ -560,7 +566,7 @@ mod test {
                     piece_locked: false,
                 },
             ];
-            session.distribute_garbage(&results);
+            session.distribute_garbage(&results, GameTime::from_millis(100));
             if expected_rows == 0 {
                 assert!(
                     session.players[1].garbage.pending.is_empty(),
@@ -595,7 +601,7 @@ mod test {
                 piece_locked: false,
             },
         ];
-        session.distribute_garbage(&results);
+        session.distribute_garbage(&results, GameTime::from_millis(100));
         assert_eq!(session.players[0].garbage.pending.len(), 0); // attacker
         assert_eq!(session.players[1].garbage.pending.len(), 1); // opponent
     }
@@ -623,7 +629,7 @@ mod test {
                 piece_locked: false,
             }, // p2
         ];
-        session.distribute_garbage(&results);
+        session.distribute_garbage(&results, GameTime::from_millis(100));
         // p0 receives from p1
         assert_eq!(session.players[0].garbage.pending.len(), 1);
         // p1 receives from p0
@@ -633,7 +639,7 @@ mod test {
     }
 
     #[rstest]
-    fn distribute_garbage_attack_has_garbage_delay_frames() {
+    fn distribute_garbage_attack_has_garbage_delay_ms() {
         let mut session = GameSession::new(Ruleset::guideline());
         session.add_player(empty_player());
         session.add_player(empty_player());
@@ -649,10 +655,10 @@ mod test {
                 piece_locked: false,
             },
         ];
-        session.distribute_garbage(&results);
+        session.distribute_garbage(&results, GameTime::from_millis(100));
         assert_eq!(
-            session.players[1].garbage.pending[0].delay_remaining,
-            GARBAGE_DELAY_FRAMES
+            session.players[1].garbage.pending[0].arrives_at,
+            GameTime::from_millis(100 + u64::from(GARBAGE_DELAY_MS))
         );
     }
 
@@ -684,7 +690,7 @@ mod test {
                 piece_locked: true,
             },
         ];
-        session.distribute_garbage(&results);
+        session.distribute_garbage(&results, GameTime::from_millis(100));
         // p0's attack_rng returned 42 → 42 % 10 = 2 (sent to p1)
         assert_eq!(session.players[1].garbage.pending[0].hole, 2);
         // p1's attack_rng returned 7 → 7 % 10 = 7 (sent to p0)
