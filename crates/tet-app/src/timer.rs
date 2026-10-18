@@ -46,12 +46,30 @@ pub struct TimerTick {
     pub inputs: Vec<Input>,
 }
 
-pub struct Timer {
-    /// `Some((direction, instant_of_first_shift))` once a horizontal key has
-    /// been held long enough to register the first shift. Reset on release.
-    last_shift_at: Option<(Direction, Instant)>,
-    /// Carry-over ms when ARR doesn't divide cleanly into the frame delta.
+struct DirState {
+    /// When this direction's key was first pressed (for DAS).
+    pressed_at: Instant,
+    /// ARR accumulator (preserved while frozen).
     arr_accumulator_ms: f32,
+    /// Whether DAS has already charged
+    das_charged: bool,
+}
+
+impl DirState {
+    fn new(now: Instant) -> Self {
+        Self {
+            pressed_at: now,
+            arr_accumulator_ms: 0.0,
+            das_charged: false,
+        }
+    }
+}
+
+pub struct Timer {
+    left: Option<DirState>,
+    right: Option<DirState>,
+    /// Which direction moved most recently (last key pressed).
+    active: Option<Direction>,
     /// Carry-over ms when `SDF_FRAMES` doesn't divide cleanly into the frame delta.
     soft_drop_accumulator_ms: f32,
 }
@@ -59,8 +77,9 @@ pub struct Timer {
 impl Timer {
     pub fn new() -> Self {
         Self {
-            last_shift_at: None,
-            arr_accumulator_ms: 0.0,
+            left: None,
+            right: None,
+            active: None,
             soft_drop_accumulator_ms: 0.0,
         }
     }
@@ -88,42 +107,69 @@ impl Timer {
         }
 
         // 2. DAS / ARR for held horizontal movement.
-        let held_dir = match (state.move_left_held, state.move_right_held) {
-            (true, false) => Some(Direction::Left),
-            (false, true) => Some(Direction::Right),
-            _ => None, // both or neither → no shift
-        };
+        let left_just_pressed = state.move_left_held && self.left.is_none();
+        let right_just_pressed = state.move_right_held && self.right.is_none();
 
-        if let Some(dir) = held_dir {
-            match self.last_shift_at {
-                None => {
-                    // First press (or direction switch): shift immediately,
-                    // start DAS countdown.
-                    inputs.push(dir.into_input());
-                    self.last_shift_at = Some((dir, now));
+        if left_just_pressed {
+            self.left = Some(DirState::new(now));
+            inputs.push(Input::MoveLeft);
+            self.active = Some(Direction::Left);
+        }
+        if right_just_pressed {
+            self.right = Some(DirState::new(now));
+            inputs.push(Input::MoveRight);
+            self.active = Some(Direction::Right);
+        }
+
+        if !state.move_left_held {
+            let was_active = self.active == Some(Direction::Left);
+            self.left = None;
+            if was_active {
+                self.active = if self.right.is_some() {
+                    Some(Direction::Right)
+                } else {
+                    None
+                };
+            }
+        }
+        if !state.move_right_held {
+            let was_active = self.active == Some(Direction::Right);
+            self.right = None;
+            if was_active {
+                self.active = if self.left.is_some() {
+                    Some(Direction::Left)
+                } else {
+                    None
+                };
+            }
+        }
+
+        if let Some(dir) = self.active {
+            let just_pressed = match dir {
+                Direction::Left => left_just_pressed,
+                Direction::Right => right_just_pressed,
+            };
+            if !just_pressed
+                && let Some(dir_state) = match dir {
+                    Direction::Left => self.left.as_mut(),
+                    Direction::Right => self.right.as_mut(),
                 }
-                Some((prev, _)) if prev != dir => {
-                    // Direction switched: shift and restart DAS.
-                    inputs.push(dir.into_input());
-                    self.last_shift_at = Some((dir, now));
-                }
-                Some((_, first_at)) => {
-                    // Same direction still held: check if we're past DAS delay.
-                    let held_ms = now.duration_since(first_at).as_millis();
+            {
+                if dir_state.das_charged {
+                    dir_state.arr_accumulator_ms += frame_delta_ms;
+                    let arr_ms = f32::from(ARR_MS);
+                    while dir_state.arr_accumulator_ms >= arr_ms {
+                        inputs.push(dir.into_input());
+                        dir_state.arr_accumulator_ms -= arr_ms;
+                    }
+                } else {
+                    let held_ms = now.duration_since(dir_state.pressed_at).as_millis();
                     if held_ms >= u128::from(DAS_MS) {
-                        // In auto-repeat phase; accumulate partial ARR credits.
-                        self.arr_accumulator_ms += frame_delta_ms;
-                        let arr_ms = f32::from(ARR_MS);
-                        while self.arr_accumulator_ms >= arr_ms {
-                            inputs.push(dir.into_input());
-                            self.arr_accumulator_ms -= arr_ms;
-                        }
+                        dir_state.das_charged = true;
+                        inputs.push(dir.into_input());
                     }
                 }
             }
-        } else {
-            self.last_shift_at = None;
-            self.arr_accumulator_ms = 0.0;
         }
 
         // 3. Soft drop.
