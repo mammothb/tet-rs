@@ -11,8 +11,6 @@
 //! input timing. The two never bleed into each other, which prevents the
 //! "soft drop coupling breaks gravity" class of bug.
 
-use std::time::Instant;
-
 use tet_application::{ARR_MS, DAS_MS, Input, SDF_INTERVAL_MS};
 
 /// Held-key state from the keyboard. Edge-triggered inputs are reported as
@@ -47,8 +45,8 @@ pub struct TimerTick {
 }
 
 struct DirState {
-    /// When this direction's key was first pressed (for DAS).
-    pressed_at: Instant,
+    /// Accumulated ms since key was first pressed.
+    das_accumulator_ms: f32,
     /// ARR accumulator (preserved while frozen).
     arr_accumulator_ms: f32,
     /// Whether DAS has already charged
@@ -56,9 +54,9 @@ struct DirState {
 }
 
 impl DirState {
-    fn new(now: Instant) -> Self {
+    fn new() -> Self {
         Self {
-            pressed_at: now,
+            das_accumulator_ms: 0.0,
             arr_accumulator_ms: 0.0,
             das_charged: false,
         }
@@ -89,7 +87,6 @@ impl Timer {
     /// `frame_delta_ms`: time elapsed since the last call to `tick`. Used to
     /// accumulate partial ARR and soft-drop frames.
     pub fn tick(&mut self, state: InputState, frame_delta_ms: f32) -> TimerTick {
-        let now = Instant::now();
         let mut inputs = Vec::new();
 
         // 1. Edge-triggered inputs (independent of timer).
@@ -111,12 +108,12 @@ impl Timer {
         let right_just_pressed = state.move_right_held && self.right.is_none();
 
         if left_just_pressed {
-            self.left = Some(DirState::new(now));
+            self.left = Some(DirState::new());
             inputs.push(Input::MoveLeft);
             self.active = Some(Direction::Left);
         }
         if right_just_pressed {
-            self.right = Some(DirState::new(now));
+            self.right = Some(DirState::new());
             inputs.push(Input::MoveRight);
             self.active = Some(Direction::Right);
         }
@@ -163,8 +160,8 @@ impl Timer {
                         dir_state.arr_accumulator_ms -= arr_ms;
                     }
                 } else {
-                    let held_ms = now.duration_since(dir_state.pressed_at).as_millis();
-                    if held_ms >= u128::from(DAS_MS) {
+                    dir_state.das_accumulator_ms += frame_delta_ms;
+                    if dir_state.das_accumulator_ms >= f32::from(DAS_MS) {
                         dir_state.das_charged = true;
                         inputs.push(dir.into_input());
                     }
@@ -387,7 +384,6 @@ mod test {
             ..no_input()
         };
         let _ = timer.tick(left, FRAME_MS);
-        std::thread::sleep(std::time::Duration::from_millis(300));
         let tick = timer.tick(left, 300.0);
         assert!(
             tick.inputs.contains(&Input::MoveLeft),
