@@ -13,19 +13,7 @@
 
 use std::time::Instant;
 
-use tet_application::{ARR_FRAMES, DAS_FRAMES, GRAVITY_MS, Input, SDF_FRAMES};
-
-/// Approximate ms per frame at 60fps. Used for converting frame-based constants
-/// (DAS, ARR) to milliseconds without pulling in `Instant`-based math at the
-/// call site.
-const MS_PER_FRAME: f32 = 1000.0 / 60.0;
-
-/// Lossless cast from a positive f32 to u32. Used for the `MS_PER_FRAME`
-/// constant, which is always a small positive value.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-const fn f32_to_u32(v: f32) -> u32 {
-    v as u32
-}
+use tet_application::{ARR_MS, DAS_MS, Input, SDF_INTERVAL_MS};
 
 /// Held-key state from the keyboard. Edge-triggered inputs are reported as
 /// "pressed this frame" (true for one frame only). Held inputs are reported as
@@ -122,12 +110,10 @@ impl Timer {
                 Some((_, first_at)) => {
                     // Same direction still held: check if we're past DAS delay.
                     let held_ms = now.duration_since(first_at).as_millis();
-                    let das_ms =
-                        u128::from(u32::from(DAS_FRAMES)) * u128::from(f32_to_u32(MS_PER_FRAME));
-                    if held_ms >= das_ms {
+                    if held_ms >= DAS_MS as u128 {
                         // In auto-repeat phase; accumulate partial ARR credits.
                         self.arr_accumulator_ms += frame_delta_ms;
-                        let arr_ms = f32::from(ARR_FRAMES) * MS_PER_FRAME;
+                        let arr_ms = ARR_MS as f32;
                         while self.arr_accumulator_ms >= arr_ms {
                             inputs.push(dir.into_input());
                             self.arr_accumulator_ms -= arr_ms;
@@ -140,12 +126,10 @@ impl Timer {
             self.arr_accumulator_ms = 0.0;
         }
 
-        // 3. Soft drop. While held, fires at SDF cadence (every
-        //    `GRAVITY_MS / SDF_FRAMES` ms). With SDF=15, that's ~15 cells/sec
-        //    on top of the 1 cell/sec gravity from `Player::step_player`.
+        // 3. Soft drop.
         if state.soft_drop_held {
             #[allow(clippy::cast_precision_loss)]
-            let sdf_interval_ms = GRAVITY_MS as f32 / f32::from(SDF_FRAMES);
+            let sdf_interval_ms = SDF_INTERVAL_MS as f32;
             self.soft_drop_accumulator_ms += frame_delta_ms;
             while self.soft_drop_accumulator_ms >= sdf_interval_ms {
                 inputs.push(Input::SoftDrop);

@@ -34,7 +34,7 @@ pub struct ScoreState {
 pub struct PendingGarbage {
     pub count: u8,
     pub hole: u8,
-    pub delay_remaining: u8,
+    pub arrives_at: GameTime,
 }
 
 /// In-flight garbage queue and the RNG for attack hole column selection

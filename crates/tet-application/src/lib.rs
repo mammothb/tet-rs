@@ -7,7 +7,7 @@ pub mod snapshot;
 pub mod tick;
 pub mod time;
 
-pub use constants::{ARR_FRAMES, DAS_FRAMES, GRAVITY_MS, SDF_FRAMES};
+pub use constants::{ARR_MS, DAS_MS, GRAVITY_MS, SDF_INTERVAL_MS};
 pub use piece::Piece;
 pub use player::{PendingGarbage, Phase, Player};
 pub use ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};

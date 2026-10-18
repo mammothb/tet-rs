@@ -1,6 +1,6 @@
 use tet_domain::{MinoType, Rotation, Ruleset, v2};
 
-use crate::constants::{ATTACK_FOR_LINES, GARBAGE_DELAY_FRAMES};
+use crate::constants::{ATTACK_FOR_LINES, GARBAGE_DELAY_MS};
 use crate::piece::Piece;
 use crate::player::{PendingGarbage, Phase, Player};
 use crate::ports::bot::BotMove;
@@ -47,8 +47,7 @@ impl GameSession {
             // 1. Decrement pending garbage delays; insert ready rows.
             let mut i = 0;
             while i < player.garbage.pending.len() {
-                player.garbage.pending[i].delay_remaining -= 1;
-                if player.garbage.pending[i].delay_remaining == 0 {
+                if now >= player.garbage.pending[i].arrives_at {
                     let a = player.garbage.pending.remove(i);
                     player.board.insert_garbage(a.count, a.hole);
                 } else {
@@ -66,7 +65,7 @@ impl GameSession {
         }
 
         // 4. Distribute new attacks from line clears to all opponents.
-        self.distribute_garbage(&results);
+        self.distribute_garbage(&results, now);
     }
 
     /// Apply a discrete human input to one player.
@@ -141,7 +140,7 @@ impl GameSession {
         self.players.iter().all(|p| p.phase == Phase::GameOver)
     }
 
-    fn distribute_garbage(&mut self, results: &[TickResult]) {
+    fn distribute_garbage(&mut self, results: &[TickResult], now: GameTime) {
         let num_cols = u32::try_from(self.ruleset.num_cols).expect("board width fits in u32");
         let n = self.players.len();
         let mut pending: Vec<(usize, PendingGarbage)> = Vec::new();
@@ -155,7 +154,7 @@ impl GameSession {
             let atk = PendingGarbage {
                 count,
                 hole,
-                delay_remaining: GARBAGE_DELAY_FRAMES,
+                arrives_at: GameTime::from_millis(now.as_millis() + GARBAGE_DELAY_MS as u64),
             };
             for opp in 0..n {
                 if opp != idx {
