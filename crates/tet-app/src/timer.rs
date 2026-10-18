@@ -310,18 +310,6 @@ mod test {
     }
 
     #[rstest]
-    fn holding_both_directions_emits_no_shift() {
-        let mut timer = Timer::new();
-        let state = InputState {
-            move_left_held: true,
-            move_right_held: true,
-            ..no_input()
-        };
-        let tick = timer.tick(state, FRAME_MS);
-        assert!(tick.inputs.is_empty());
-    }
-
-    #[rstest]
     fn das_blocks_repeat_within_window() {
         let mut timer = Timer::new();
         let state = InputState {
@@ -333,6 +321,147 @@ mod test {
             let tick = timer.tick(state, FRAME_MS);
             assert!(tick.inputs.is_empty());
         }
+    }
+
+    // -------- simultaneous hold (last key wins with revert) --------
+
+    #[rstest]
+    fn both_pressed_same_frame_right_wins() {
+        let mut timer = Timer::new();
+        let state = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let tick = timer.tick(state, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveLeft, Input::MoveRight]);
+        let tick = timer.tick(state, FRAME_MS);
+        assert!(tick.inputs.is_empty());
+    }
+
+    #[rstest]
+    fn holding_left_then_pressing_right_shifts_right() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+    }
+
+    #[rstest]
+    fn releasing_right_while_left_held_reverts_to_left() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(left, FRAME_MS);
+        assert!(tick.inputs.is_empty());
+    }
+
+    #[rstest]
+    fn revert_to_left_preserves_das_charge() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let tick = timer.tick(left, 300.0);
+        assert!(
+            tick.inputs.contains(&Input::MoveLeft),
+            "left should has DAS-charged and emitted a shift"
+        );
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(left, 20.0);
+        let left_shifts = tick
+            .inputs
+            .iter()
+            .filter(|i| **i == Input::MoveLeft)
+            .count();
+        assert!(
+            left_shifts > 0,
+            "left should resume ARR after revert, got {left_shifts} shifts"
+        );
+    }
+
+    #[rstest]
+    fn release_both_simultaneously_clears_all_state() {
+        let mut timer = Timer::new();
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(both, FRAME_MS);
+        let tick = timer.tick(no_input(), FRAME_MS);
+        assert!(tick.inputs.is_empty());
+
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let tick = timer.tick(left, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveLeft]);
+    }
+
+    #[rstest]
+    fn tap_right_while_holding_left_fires() {
+        let mut timer = Timer::new();
+        let left = InputState {
+            move_left_held: true,
+            ..no_input()
+        };
+        let both = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+
+        let _ = timer.tick(left, FRAME_MS);
+        let tick = timer.tick(both, FRAME_MS);
+        assert_eq!(tick.inputs, vec![Input::MoveRight]);
+    }
+
+    #[rstest]
+    fn soft_drop_still_fires_during_both_held() {
+        let mut timer = Timer::new();
+        let state = InputState {
+            move_left_held: true,
+            move_right_held: true,
+            soft_drop_held: true,
+            ..no_input()
+        };
+        let _ = timer.tick(state, FRAME_MS);
+        let tick = timer.tick(state, 100.0);
+        assert!(
+            tick.inputs.contains(&Input::SoftDrop),
+            "soft drop should fire even with both directions held"
+        );
     }
 
     // -------- soft drop --------
