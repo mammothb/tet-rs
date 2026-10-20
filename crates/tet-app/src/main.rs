@@ -1,6 +1,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 mod bot_worker;
+mod settings;
 mod timer;
 
 use std::{path::Path, time::Instant};
@@ -14,6 +15,7 @@ use tet_infrastructure::{
 use tokio::sync::oneshot;
 
 use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
+use settings::Settings;
 use timer::{InputState, Timer};
 
 /// Read the keyboard state and produce an `InputState` for the timer.

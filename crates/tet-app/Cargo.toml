@@ -15,7 +15,9 @@ tet-domain = { workspace = true }
 tet-infrastructure = { workspace = true }
 
 macroquad = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
