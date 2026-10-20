@@ -9,7 +9,7 @@ cargo build --release
 
 echo === Creating dist ===
 mkdir "dist/assets/skins"
-copy target\release\tet-app.exe dist\
+copy target\release\tet-rs.exe dist\
 copy assets\skins\default.png dist\assets\skins\
 copy settings.toml dist\
 
