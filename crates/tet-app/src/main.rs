@@ -1,4 +1,5 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#![windows_subsystem = "windows"]
 
 mod bot_worker;
 mod display;
