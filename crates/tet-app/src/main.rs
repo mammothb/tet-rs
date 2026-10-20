@@ -86,8 +86,7 @@ async fn main() {
         ..Layout::default()
     };
     let skin_path = resolve_skin_path(settings.display.skin.as_ref());
-    let mut theme = Theme::DARK;
-    theme.ghost_alpha = settings.display.ghost_alpha;
+    let theme = Theme::dark(settings.display.ghost_alpha);
     let fonts = Fonts::load().expect("Fira Code fonts are embedded in the binary");
     let canvas = MacroquadCanvas::new(theme, fonts, skin_path.as_deref()).await;
     let mut renderer = MacroquadRenderer::new(canvas);
