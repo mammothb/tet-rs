@@ -11,7 +11,9 @@
 //! input timing. The two never bleed into each other, which prevents the
 //! "soft drop coupling breaks gravity" class of bug.
 
-use tet_application::{ARR_MS, DAS_MS, Input, SDF_INTERVAL_MS};
+use tet_application::Input;
+
+use crate::settings::TimingSettings;
 
 /// Held-key state from the keyboard. Edge-triggered inputs are reported as
 /// "pressed this frame" (true for one frame only). Held inputs are reported as
@@ -64,6 +66,9 @@ impl DirState {
 }
 
 pub struct Timer {
+    das_ms: f32,
+    arr_ms: f32,
+    sdf_interval_ms: f32,
     left: Option<DirState>,
     right: Option<DirState>,
     /// Which direction moved most recently (last key pressed).
@@ -73,8 +78,11 @@ pub struct Timer {
 }
 
 impl Timer {
-    pub fn new() -> Self {
+    pub fn new(settings: &TimingSettings) -> Self {
         Self {
+            das_ms: f32::from(settings.das),
+            arr_ms: f32::from(settings.arr),
+            sdf_interval_ms: f32::from(settings.sdf_interval),
             left: None,
             right: None,
             active: None,
@@ -154,14 +162,13 @@ impl Timer {
             {
                 if dir_state.das_charged {
                     dir_state.arr_accumulator_ms += frame_delta_ms;
-                    let arr_ms = f32::from(ARR_MS);
-                    while dir_state.arr_accumulator_ms >= arr_ms {
+                    while dir_state.arr_accumulator_ms >= self.arr_ms {
                         inputs.push(dir.into_input());
-                        dir_state.arr_accumulator_ms -= arr_ms;
+                        dir_state.arr_accumulator_ms -= self.arr_ms;
                     }
                 } else {
                     dir_state.das_accumulator_ms += frame_delta_ms;
-                    if dir_state.das_accumulator_ms >= f32::from(DAS_MS) {
+                    if dir_state.das_accumulator_ms >= self.das_ms {
                         dir_state.das_charged = true;
                         inputs.push(dir.into_input());
                     }
@@ -171,23 +178,16 @@ impl Timer {
 
         // 3. Soft drop.
         if state.soft_drop_held {
-            let sdf_interval_ms = f32::from(SDF_INTERVAL_MS);
             self.soft_drop_accumulator_ms += frame_delta_ms;
-            while self.soft_drop_accumulator_ms >= sdf_interval_ms {
+            while self.soft_drop_accumulator_ms >= self.sdf_interval_ms {
                 inputs.push(Input::SoftDrop);
-                self.soft_drop_accumulator_ms -= sdf_interval_ms;
+                self.soft_drop_accumulator_ms -= self.sdf_interval_ms;
             }
         } else {
             self.soft_drop_accumulator_ms = 0.0;
         }
 
         TimerTick { inputs }
-    }
-}
-
-impl Default for Timer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -204,7 +204,7 @@ impl Direction {
 mod test {
     use super::*;
 
-    use rstest::rstest;
+    use rstest::*;
 
     /// 60fps frame delta in ms.
     const FRAME_MS: f32 = 1000.0 / 60.0;
@@ -214,11 +214,17 @@ mod test {
         InputState::default()
     }
 
+    #[fixture]
+    #[once]
+    fn timing_settings() -> TimingSettings {
+        TimingSettings::default()
+    }
+
     // -------- edge-triggered inputs --------
 
     #[rstest]
-    fn rotate_cw_passes_through_immediately() {
-        let mut timer = Timer::new();
+    fn rotate_cw_passes_through_immediately(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             rotate_cw_pressed: true,
             ..no_input()
@@ -228,8 +234,8 @@ mod test {
     }
 
     #[rstest]
-    fn multiple_edge_inputs_emit_in_order() {
-        let mut timer = Timer::new();
+    fn multiple_edge_inputs_emit_in_order(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             rotate_cw_pressed: true,
             hard_drop_pressed: true,
@@ -244,8 +250,8 @@ mod test {
     }
 
     #[rstest]
-    fn no_inputs_when_nothing_held_or_pressed() {
-        let mut timer = Timer::new();
+    fn no_inputs_when_nothing_held_or_pressed(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let tick = timer.tick(no_input(), FRAME_MS);
         assert!(tick.inputs.is_empty());
     }
@@ -253,8 +259,8 @@ mod test {
     // -------- horizontal shift (DAS / ARR) --------
 
     #[rstest]
-    fn holding_left_shifts_once_immediately() {
-        let mut timer = Timer::new();
+    fn holding_left_shifts_once_immediately(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             move_left_held: true,
             ..no_input()
@@ -264,9 +270,9 @@ mod test {
     }
 
     #[rstest]
-    fn holding_left_does_not_repeat_during_das_delay() {
+    fn holding_left_does_not_repeat_during_das_delay(timing_settings: &TimingSettings) {
         // DAS = 16 frames ≈ 267ms. We're well within DAS at frame 2.
-        let mut timer = Timer::new();
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             move_left_held: true,
             ..no_input()
@@ -277,8 +283,8 @@ mod test {
     }
 
     #[rstest]
-    fn releasing_left_resets_das() {
-        let mut timer = Timer::new();
+    fn releasing_left_resets_das(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let held = InputState {
             move_left_held: true,
             ..no_input()
@@ -291,8 +297,8 @@ mod test {
     }
 
     #[rstest]
-    fn switching_direction_shifts_and_resets_das() {
-        let mut timer = Timer::new();
+    fn switching_direction_shifts_and_resets_das(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let left = InputState {
             move_left_held: true,
             ..no_input()
@@ -307,8 +313,8 @@ mod test {
     }
 
     #[rstest]
-    fn das_blocks_repeat_within_window() {
-        let mut timer = Timer::new();
+    fn das_blocks_repeat_within_window(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             move_left_held: true,
             ..no_input()
@@ -323,8 +329,8 @@ mod test {
     // -------- simultaneous hold (last key wins with revert) --------
 
     #[rstest]
-    fn both_pressed_same_frame_right_wins() {
-        let mut timer = Timer::new();
+    fn both_pressed_same_frame_right_wins(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             move_left_held: true,
             move_right_held: true,
@@ -337,8 +343,8 @@ mod test {
     }
 
     #[rstest]
-    fn holding_left_then_pressing_right_shifts_right() {
-        let mut timer = Timer::new();
+    fn holding_left_then_pressing_right_shifts_right(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let left = InputState {
             move_left_held: true,
             ..no_input()
@@ -354,8 +360,8 @@ mod test {
     }
 
     #[rstest]
-    fn releasing_right_while_left_held_reverts_to_left() {
-        let mut timer = Timer::new();
+    fn releasing_right_while_left_held_reverts_to_left(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let left = InputState {
             move_left_held: true,
             ..no_input()
@@ -372,8 +378,8 @@ mod test {
     }
 
     #[rstest]
-    fn revert_to_left_preserves_das_charge() {
-        let mut timer = Timer::new();
+    fn revert_to_left_preserves_das_charge(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let left = InputState {
             move_left_held: true,
             ..no_input()
@@ -403,8 +409,8 @@ mod test {
     }
 
     #[rstest]
-    fn release_both_simultaneously_clears_all_state() {
-        let mut timer = Timer::new();
+    fn release_both_simultaneously_clears_all_state(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let both = InputState {
             move_left_held: true,
             move_right_held: true,
@@ -423,8 +429,8 @@ mod test {
     }
 
     #[rstest]
-    fn tap_right_while_holding_left_fires() {
-        let mut timer = Timer::new();
+    fn tap_right_while_holding_left_fires(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let left = InputState {
             move_left_held: true,
             ..no_input()
@@ -444,8 +450,8 @@ mod test {
     }
 
     #[rstest]
-    fn soft_drop_still_fires_during_both_held() {
-        let mut timer = Timer::new();
+    fn soft_drop_still_fires_during_both_held(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             move_left_held: true,
             move_right_held: true,
@@ -463,10 +469,10 @@ mod test {
     // -------- soft drop --------
 
     #[rstest]
-    fn soft_drop_fires_at_sdf_cadence() {
+    fn soft_drop_fires_at_sdf_cadence(timing_settings: &TimingSettings) {
         // SDF=15 → soft drop every ~67ms. With a 100ms frame delta,
         // we should fire exactly 1 soft drop per tick.
-        let mut timer = Timer::new();
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             soft_drop_held: true,
             ..no_input()
@@ -480,8 +486,8 @@ mod test {
     }
 
     #[rstest]
-    fn releasing_soft_drop_resets_accumulator() {
-        let mut timer = Timer::new();
+    fn releasing_soft_drop_resets_accumulator(timing_settings: &TimingSettings) {
+        let mut timer = Timer::new(timing_settings);
         let held = InputState {
             soft_drop_held: true,
             ..no_input()
@@ -496,10 +502,10 @@ mod test {
     }
 
     #[rstest]
-    fn soft_drop_emits_one_per_sdf_interval() {
+    fn soft_drop_emits_one_per_sdf_interval(timing_settings: &TimingSettings) {
         // SDF=15 → interval ≈67ms. With a 200ms frame delta, we should
         // emit ~3 soft drops (200 / 67 ≈ 2.99).
-        let mut timer = Timer::new();
+        let mut timer = Timer::new(timing_settings);
         let state = InputState {
             soft_drop_held: true,
             ..no_input()

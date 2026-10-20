@@ -128,6 +128,14 @@ impl Theme {
             queue_preview_spacing_px: 4.0,
         },
     };
+
+    #[must_use]
+    pub const fn dark(ghost_alpha: u8) -> Self {
+        Self {
+            ghost_alpha,
+            ..Self::DARK
+        }
+    }
 }
 
 #[cfg(test)]
