@@ -1,0 +1,18 @@
+[controls]
+move_left = "Left"
+move_right = "Right"
+soft_drop = "Down"
+hard_drop = "Space"
+rotate_cw = "F"
+rotate_ccw = "D"
+hold = "S"
+
+[timing]
+das = 267
+arr = 17
+sdf_interval = 67
+
+[display]
+grid_style = "full"
+ghost_alpha = 128
+skin = "default"

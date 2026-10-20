@@ -1,6 +1,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 mod bot_worker;
+mod input;
 mod settings;
 mod timer;
 
@@ -16,20 +17,12 @@ use tokio::sync::oneshot;
 
 use bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
 use settings::Settings;
-use timer::{InputState, Timer};
+use timer::Timer;
 
-/// Read the keyboard state and produce an `InputState` for the timer.
-fn collect_input_state() -> InputState {
-    InputState {
-        move_left_held: is_key_down(KeyCode::Left),
-        move_right_held: is_key_down(KeyCode::Right),
-        soft_drop_held: is_key_down(KeyCode::Down),
-        rotate_cw_pressed: is_key_pressed(KeyCode::F),
-        rotate_ccw_pressed: is_key_pressed(KeyCode::D),
-        hard_drop_pressed: is_key_pressed(KeyCode::Space),
-        hold_pressed: is_key_pressed(KeyCode::S),
-    }
-}
+use crate::{
+    input::{ControlKeys, collect_input_state},
+    settings::ControlSettings,
+};
 
 /// Compose a `Frame` from the current session state. Each player gets a
 /// `PlayerView` with a layout positioned side-by-side across the screen.
@@ -79,6 +72,13 @@ async fn main() {
         .build()
         .expect("build tokio runtime");
 
+    let settings = Settings::load(Path::new("settings.toml"));
+    let keys = ControlKeys::from_settings(&settings.controls).unwrap_or_else(|e| {
+        eprintln!("warning: bad key binding: {e}, using defaults");
+        ControlKeys::from_settings(&ControlSettings::default()).unwrap()
+    });
+    let mut timer = Timer::new(&settings.timing);
+
     let ruleset = Ruleset::guideline();
     let mut session = GameSession::new(ruleset);
     let (_, queue_rng) = SmallRng::new(None);
@@ -88,7 +88,6 @@ async fn main() {
     let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
-    let mut timer = Timer::new();
     let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
@@ -124,7 +123,7 @@ async fn main() {
         }
 
         // Timer translates keyboard state into inputs.
-        let input_state = collect_input_state();
+        let input_state = collect_input_state(&keys);
         let tick = timer.tick(input_state, frame_delta_ms);
         let now = GameTime::from_millis(game_start.elapsed().as_millis() as u64);
 

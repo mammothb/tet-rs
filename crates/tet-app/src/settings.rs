@@ -1,5 +1,6 @@
+use std::path::Path;
+
 use serde::Deserialize;
-use tet_application::{ARR_MS, DAS_MS, SDF_INTERVAL_MS};
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -7,6 +8,18 @@ pub struct Settings {
     pub controls: ControlSettings,
     pub timing: TimingSettings,
     pub display: DisplaySettings,
+}
+
+impl Settings {
+    pub fn load(path: &Path) -> Self {
+        match fs_err::read_to_string(path) {
+            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
+                eprintln!("warning: bad settings.toml: {e}, using defaults");
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -46,9 +59,9 @@ pub struct TimingSettings {
 impl Default for TimingSettings {
     fn default() -> Self {
         Self {
-            das: DAS_MS,
-            arr: ARR_MS,
-            sdf_interval: SDF_INTERVAL_MS,
+            das: 267,
+            arr: 17,
+            sdf_interval: 67,
         }
     }
 }
@@ -58,6 +71,7 @@ impl Default for TimingSettings {
 pub struct DisplaySettings {
     pub grid_style: String,
     pub ghost_alpha: u8,
+    pub skin: Option<String>,
 }
 
 impl Default for DisplaySettings {
@@ -65,6 +79,7 @@ impl Default for DisplaySettings {
         Self {
             grid_style: "full".to_string(),
             ghost_alpha: 128,
+            skin: Some("default".to_string()),
         }
     }
 }
