@@ -162,13 +162,15 @@ async fn main() {
         }
 
         // Apply any completed bot moves
-        let completed: Vec<_> = pending_suggests
-            .drain(..)
-            .filter_map(|(idx, mut rx)| match rx.try_recv() {
-                Ok(Ok(moves)) => Some((idx, moves)),
-                _ => None,
-            })
-            .collect();
+        let mut completed = Vec::new();
+        pending_suggests.retain_mut(|(idx, rx)| match rx.try_recv() {
+            Ok(Ok(moves)) => {
+                completed.push((*idx, moves));
+                false
+            }
+            Ok(Err(_)) => false,
+            Err(_) => true,
+        });
         for (idx, moves) in completed {
             for mv in moves {
                 if session::apply_bot_move(&mut session.players[idx], mv, &session.ruleset)
