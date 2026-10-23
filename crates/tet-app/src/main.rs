@@ -154,11 +154,13 @@ async fn main() {
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {
-            let snap = session.snapshot(*session_idx);
-            handle.req_tx.send(BotRequest::Update(snap)).ok();
-            let (reply_tx, reply_rx) = oneshot::channel();
-            handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
-            pending_suggests.push((*session_idx, reply_rx));
+            if !pending_suggests.iter().any(|(idx, _)| idx == session_idx) {
+                let snap = session.snapshot(*session_idx);
+                handle.req_tx.send(BotRequest::Update(snap)).ok();
+                let (reply_tx, reply_rx) = oneshot::channel();
+                handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
+                pending_suggests.push((*session_idx, reply_rx));
+            }
         }
 
         // Apply any completed bot moves
@@ -168,7 +170,10 @@ async fn main() {
                 completed.push((*idx, moves));
                 false
             }
-            Ok(Err(_)) => false,
+            Ok(Err(err)) => {
+                eprintln!("{err}");
+                false
+            }
             Err(_) => true,
         });
         for (idx, moves) in completed {
@@ -176,6 +181,8 @@ async fn main() {
                 if session::apply_bot_move(&mut session.players[idx], mv, &session.ruleset)
                     .is_some()
                 {
+                    let result = tick::try_lock(&mut session.players[idx]);
+                    tick::post_lock(&mut session.players[idx], &result, &session.ruleset);
                     break;
                 }
             }
