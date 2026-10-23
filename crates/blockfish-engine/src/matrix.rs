@@ -1,4 +1,4 @@
-use serde::{de::Error, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Error};
 use std::{
     convert::{TryFrom, TryInto},
     ops::Range,

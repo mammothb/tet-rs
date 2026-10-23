@@ -230,7 +230,7 @@ impl<'de> Deserialize<'de> for Kick {
 /// Returns `(origin_row, origin_col, mat)` where `mat` is a normalized (no empty rows or
 /// columns on the far sides) view of the coords, with `(origin_row, origin_col)` as the
 /// origin.
-#[cfg(any(test, feature = "gen-shtb"))]
+#[cfg(test)]
 fn normalize_coords(coords: &[(u16, u16)]) -> (u16, u16, BasicMatrix) {
     assert!(!coords.is_empty());
     let min_row = coords.iter().map(|&(i, _)| i).min().unwrap();
@@ -243,91 +243,7 @@ fn normalize_coords(coords: &[(u16, u16)]) -> (u16, u16, BasicMatrix) {
     (min_row, min_col, mat)
 }
 
-#[cfg(feature = "gen-shtb")]
-impl KickTable {
-    /// Generate a kick table for a particular shape given a ruleset.
-    fn from_ruleset(rules: &block_stacker::Ruleset, typ: block_stacker::PieceType) -> Self {
-        let mut kicks = HashMap::new();
-        for r in 0..4i32 {
-            let ori = Orientation::from_u8(r as u8).unwrap();
-            kicks.insert(Kick(ori, ori.ccw()), rules.kicks(typ, r, r - 1).collect());
-            kicks.insert(Kick(ori, ori.cw()), rules.kicks(typ, r, r + 1).collect());
-        }
-        Self { kicks }
-    }
-
-    /// Convert to a `BTreeMap` (for normalized key order).
-    fn to_btree_map(&self) -> std::collections::BTreeMap<Kick, Vec<(i16, i16)>> {
-        self.kicks
-            .iter()
-            .map(|(&kick, offsets)| (kick, offsets.clone()))
-            .collect()
-    }
-}
-
-#[cfg(feature = "gen-shtb")]
-impl ShapeTable {
-    /// Generate a shape table from the given game ruleset.
-    pub fn from_ruleset(rules: &block_stacker::Ruleset) -> Self {
-        use std::convert::TryInto;
-
-        let mut shapes = HashMap::new();
-        let mut matrices = vec![];
-        let mut matrix_lookup = HashMap::new();
-        let mut kick_tables = vec![];
-        let mut kick_table_lookup = HashMap::new();
-        let mut coords = Vec::with_capacity(4);
-
-        for typ in rules.types() {
-            let (_, spawn_col) = rules.spawn(typ);
-
-            // get matrix representations for each orientation
-            let mut orientations = [OrientationInfo::default(); 4];
-            for r in 0..4 {
-                coords.clear();
-                coords.extend(rules.coords(typ, r));
-                let (i0, j0, matrix) = normalize_coords(&coords);
-                let mut rs = &mut orientations[r as usize];
-                rs.offset = (i0 as i16, j0 as i16);
-                // deduplicate identical matrices
-                rs.matrix_index = *matrix_lookup.entry(matrix.clone()).or_insert_with(|| {
-                    matrices.push(matrix);
-                    matrices.len() - 1
-                });
-            }
-
-            // generate kick table representation
-            let kick_table = KickTable::from_ruleset(rules, typ);
-            // deduplicate identical kick tables
-            let kick_table_index = *kick_table_lookup
-                .entry(kick_table.to_btree_map())
-                .or_insert_with(|| {
-                    kick_tables.push(kick_table);
-                    kick_tables.len() - 1
-                });
-
-            // convert PieceType to our color representation
-            let color = typ
-                .try_into()
-                .expect("bug: ruleset has invalid shape color");
-
-            let shape = ShapeData {
-                spawn_col,
-                orientations,
-                kick_table_index,
-            };
-            shapes.insert(color, shape);
-        }
-
-        Self {
-            shapes,
-            matrices,
-            kick_tables,
-        }
-    }
-}
-
-static SRS_BYTES: &[u8] = include_bytes!("../../support/test/srs-shape-table.json");
+static SRS_BYTES: &[u8] = include_bytes!("../support/test/srs-shape-table.json");
 
 /// Returns a new copy of the SRS shape table.
 pub fn srs() -> ShapeTable {

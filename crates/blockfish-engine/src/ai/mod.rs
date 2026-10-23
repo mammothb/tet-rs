@@ -1,7 +1,7 @@
 use crate::{
-    config::Config,
-    shape::{srs, ShapeTable},
     BasicMatrix, Color, Input,
+    config::Config,
+    shape::{ShapeTable, srs},
 };
 
 mod analysis;

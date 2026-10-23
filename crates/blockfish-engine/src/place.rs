@@ -1,6 +1,6 @@
 use crate::{
-    shape::{NormalizedShapeTransform, ShapeRef, ShapeTable, Transform},
     BasicMatrix, Color, Input, Orientation,
+    shape::{NormalizedShapeTransform, ShapeRef, ShapeTable, Transform},
 };
 use std::collections::HashSet;
 
@@ -152,7 +152,7 @@ impl<'s> Iterator for PlaceFinder<'s> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{ai::Snapshot, basic_matrix, shape::srs, Color, Input::*, Orientation::*};
+    use crate::{Color, Input::*, Orientation::*, ai::Snapshot, basic_matrix, shape::srs};
 
     /// Returns a `PlaceFinder` iterator already "primed" with node state `st`.
     fn placements<'s>(shtb: &'s ShapeTable, ss: Snapshot) -> PlaceFinder<'s> {

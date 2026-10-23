@@ -45,11 +45,7 @@ impl State {
         };
         let c1 = from_top(1);
         let c2 = from_top(2);
-        if self.has_held {
-            (c2, c1)
-        } else {
-            (c1, c2)
-        }
+        if self.has_held { (c2, c1) } else { (c1, c2) }
     }
 
     /// Configures the placements iterator `pls` to produce the set of valid placements
@@ -114,7 +110,7 @@ impl From<Snapshot> for State {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{shape::srs, Orientation::*};
+    use crate::{Orientation::*, shape::srs};
 
     #[test]
     fn test_state_operations() {

@@ -144,19 +144,21 @@ fn intersecting_ranges<'a, T: Ord>(
     ys: &'a [Range<T>],
 ) -> impl Iterator<Item = (usize, usize)> + 'a {
     let (mut i1, mut i2) = (0, 0);
-    std::iter::from_fn(move || loop {
-        let r1 = xs.get(i1)?;
-        let r2 = ys.get(i2)?;
-        if r2.start >= r1.end {
-            i1 += 1;
-        } else if r1.start >= r2.end {
-            i2 += 1;
-        } else if r2.end >= r1.end {
-            i1 += 1;
-            return Some((i1 - 1, i2));
-        } else {
-            i2 += 1;
-            return Some((i1, i2 - 1));
+    std::iter::from_fn(move || {
+        loop {
+            let r1 = xs.get(i1)?;
+            let r2 = ys.get(i2)?;
+            if r2.start >= r1.end {
+                i1 += 1;
+            } else if r1.start >= r2.end {
+                i2 += 1;
+            } else if r2.end >= r1.end {
+                i1 += 1;
+                return Some((i1 - 1, i2));
+            } else {
+                i2 += 1;
+                return Some((i1, i2 - 1));
+            }
         }
     })
 }

@@ -1,8 +1,8 @@
-use super::{state::State, Stats, Suggestion};
-use crate::{finesse::FinesseFinder, place::PlaceFinder, shape::ShapeTable, Config, Input};
+use super::{Stats, Suggestion, state::State};
+use crate::{Config, Input, finesse::FinesseFinder, place::PlaceFinder, shape::ShapeTable};
 use std::{
     collections::HashMap,
-    sync::{mpsc, Arc, RwLock},
+    sync::{Arc, RwLock, mpsc},
 };
 
 use super::b_star::{Search, Step};
