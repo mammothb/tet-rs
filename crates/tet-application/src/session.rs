@@ -227,7 +227,7 @@ mod test {
     use rstest::rstest;
     use tet_domain::{Board, Cell, MinoType, Orientation, Queue, Rng};
 
-    use crate::player::{Controller, GarbageState, Player, ScoreState};
+    use crate::player::{GarbageState, Player, ScoreState};
     use crate::ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
     use crate::tick::TSpinStatus;
 
@@ -350,7 +350,6 @@ mod test {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
-            controller: Controller::Bot(Box::new(StubBot::empty())),
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng: Box::new(StubRng::counter()),

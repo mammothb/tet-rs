@@ -2,7 +2,6 @@ use tet_domain::{Board, MinoType, Queue, Rng, Ruleset};
 
 use crate::constants::{GRAVITY_MS, LOCK_DELAY_MS};
 use crate::piece::Piece;
-use crate::ports::bot::BotTransport;
 use crate::tick::{TSpinStatus, TickResult, post_lock, step_gravity, try_lock};
 use crate::time::GameTime;
 
@@ -10,11 +9,6 @@ use crate::time::GameTime;
 pub enum Phase {
     Playing,
     GameOver,
-}
-
-pub enum Controller {
-    Human,
-    Bot(Box<dyn BotTransport>),
 }
 
 /// Scoring and combo tracking for one player
@@ -56,7 +50,6 @@ pub struct Player {
     /// timestamp is older than `LOCK_DELAY_MS`.
     pub lock_grounded_at: Option<GameTime>,
     pub phase: Phase,
-    pub controller: Controller,
     pub garbage: GarbageState,
     /// Time of the last gravity shift. Used by `step_player` to decide when
     /// the active piece should fall one cell. Per-player state — each
@@ -85,7 +78,6 @@ impl Player {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
-            controller: Controller::Human,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng,
@@ -98,11 +90,7 @@ impl Player {
     /// Same two-RNG split as `new_human`. Active piece is drawn from the
     /// queue (first bag piece).
     #[must_use]
-    pub fn new_bot(
-        queue_rng: Box<dyn Rng>,
-        attack_rng: Box<dyn Rng>,
-        bot: Box<dyn BotTransport>,
-    ) -> Self {
+    pub fn new_bot(queue_rng: Box<dyn Rng>, attack_rng: Box<dyn Rng>) -> Self {
         let mut queue = Queue::new(queue_rng, 5);
         let current = Piece::spawn(queue.take());
         Self {
@@ -114,7 +102,6 @@ impl Player {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
-            controller: Controller::Bot(bot),
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng,

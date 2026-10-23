@@ -275,9 +275,7 @@ mod test {
     use rstest::rstest;
     use tet_domain::{Board, Queue, Rng};
 
-    use crate::player::{Controller, GarbageState, PendingGarbage, ScoreState};
-    use crate::ports::bot::{BotError, BotMove, BotTransport};
-    use crate::snapshot::PlayerSnapshot;
+    use crate::player::{GarbageState, PendingGarbage, ScoreState};
 
     // -------- test fixtures --------
 
@@ -319,31 +317,12 @@ mod test {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
-            controller: Controller::Bot(Box::new(NoopBot)),
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng: Box::new(StubRng::counter()),
             },
             last_gravity_at: GameTime::ZERO,
         }
-    }
-
-    /// Stub `BotTransport` that does nothing. Needed only to fill the
-    /// `Controller::Bot` variant for `t_player`. Not used in any test.
-    struct NoopBot;
-
-    #[async_trait::async_trait]
-    impl BotTransport for NoopBot {
-        fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
-            Ok(())
-        }
-        async fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
-            Ok(())
-        }
-        async fn suggest(&mut self) -> Result<Vec<BotMove>, BotError> {
-            Ok(Vec::new())
-        }
-        async fn stop(&mut self) {}
     }
 
     // -------- step_gravity --------

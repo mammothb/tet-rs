@@ -12,13 +12,14 @@ use std::{path::Path, time::Instant};
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
+use tet_infrastructure::bot::blockfish::BlockfishBot;
 use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
 use tokio::sync::oneshot;
 
-use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
+use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest, spawn_bot_worker};
 use crate::display::{parse_grid_style, resolve_skin_path};
 use crate::input::{ControlKeys, collect_input_state};
 use crate::settings::{ControlSettings, Settings};
@@ -65,7 +66,7 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
 
 #[macroquad::main("tet-rs")]
 async fn main() {
-    let _runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
         .build()
@@ -98,7 +99,17 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
+    let mut bot_handles: Vec<(usize, BotHandle)> = Vec::new();
+
+    let bf_bot = Box::new(BlockfishBot::new());
+    let bf_bot_handle = spawn_bot_worker(runtime.handle(), bf_bot);
+    let (_, bf_bot_queue_rng) = SmallRng::new(None);
+    let (_, bf_bot_attack_rng) = SmallRng::new(None);
+    let bf_bot_idx = session.add_player(Player::new_bot(
+        Box::new(bf_bot_queue_rng),
+        Box::new(bf_bot_attack_rng),
+    ));
+    bot_handles.push((bf_bot_idx, bf_bot_handle));
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
     let game_start = Instant::now();
