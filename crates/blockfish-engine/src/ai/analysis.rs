@@ -139,6 +139,10 @@ impl Analysis {
         }
     }
 
+    pub fn trace(&self, m_id: MoveId) -> &[usize] {
+        &self.moves.get(&m_id).expect("invalid id").trace
+    }
+
     /// Returns the statistics gathered about the analysis, if any. Should be `Some` only
     /// after the analysis finishes.
     pub fn stats(&self) -> Option<Stats> {

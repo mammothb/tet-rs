@@ -30,6 +30,11 @@ impl Board {
     }
 
     #[must_use]
+    pub fn num_cols(&self) -> u8 {
+        self.num_cols
+    }
+
+    #[must_use]
     pub fn get(&self, p: Vec2) -> Cell {
         let (Ok(x), Ok(y)) = (usize::try_from(p.x), usize::try_from(p.y)) else {
             return Cell::Empty;

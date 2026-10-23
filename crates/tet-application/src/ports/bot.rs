@@ -24,6 +24,7 @@ pub enum BotSpin {
 pub struct BotMove {
     pub location: BotPieceLocation,
     pub spin: BotSpin,
+    pub hold: bool,
 }
 
 #[derive(Debug, thiserror::Error)]

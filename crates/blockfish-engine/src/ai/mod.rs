@@ -1,13 +1,17 @@
 use crate::{
     BasicMatrix, Color, Input,
     config::Config,
-    shape::{ShapeTable, srs},
+    place::PlaceFinder,
+    shape::{ShapeTable, Transform, srs},
 };
 
 mod analysis;
 mod b_star;
 mod eval;
 mod state;
+
+pub use b_star::{Search, Step};
+pub use state::State;
 
 // Input / output types
 
@@ -102,5 +106,69 @@ impl AI {
         let (tx, rx) = std::sync::mpsc::channel();
         self.all_tx = Some(tx);
         rx
+    }
+}
+
+pub fn analyze(
+    shape_table: &ShapeTable,
+    config: &Config,
+    root: State,
+) -> Option<(i64, Vec<usize>)> {
+    let mut search = Search::new(shape_table, config.parameters.clone());
+    search.start(root);
+
+    let mut result = None;
+    while search.node_count() < config.search_limit {
+        match search.step() {
+            Ok(Step::RatingChanged { trace, rating, .. }) => {
+                if result
+                    .as_ref()
+                    .is_none_or(|&(best_rating, _)| rating < best_rating)
+                {
+                    result = Some((rating, trace));
+                }
+            }
+            Ok(Step::SequenceRejected { .. }) | Ok(Step::Other) => {}
+            Err(_) => break,
+        }
+    }
+    result
+}
+
+pub fn reconstruct_first_placement(
+    shape_table: &ShapeTable,
+    state: State,
+    trace: &[usize],
+) -> Option<(Color, Transform, bool)> {
+    let first = *trace.first()?;
+    let mut pfind = PlaceFinder::new(shape_table);
+    let placement = state.placements(&mut pfind).find(|p| p.idx == first)?;
+    Some((placement.shape.color(), placement.tf, placement.did_hold))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn analyze_empty_board_finds_move() {
+        let shape_table = srs();
+        let config = Config::default();
+        let snapshot = Snapshot {
+            hold: None,
+            queue: "JLSZTIO".chars().map(Color::n).collect(),
+            matrix: BasicMatrix::with_cols(10),
+        };
+
+        let result = analyze(&shape_table, &config, snapshot.clone().into());
+        assert!(
+            result.is_some(),
+            "should find at least one move on an empty board"
+        );
+        let (_, trace) = result.unwrap();
+        assert!(!trace.is_empty(), "trace must not be empty");
+
+        let placement = reconstruct_first_placement(&shape_table, State::from(snapshot), &trace);
+        assert!(placement.is_some(), "must be able to reconstruct placement");
     }
 }

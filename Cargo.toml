@@ -8,6 +8,7 @@ rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]
+blockfish = { path = "crates/blockfish-engine" }
 tet-application = { path = "crates/tet-application" }
 tet-domain = { path = "crates/tet-domain" }
 tet-infrastructure = { path = "crates/tet-infrastructure" }

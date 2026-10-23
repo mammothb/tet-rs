@@ -822,6 +822,7 @@ mod test {
                 y: 19,
             },
             spin: BotSpin::None,
+            hold: false,
         };
         let mut bot = StubBot::new(vec![mv]);
         session.step_bot(0, &mut bot).await;
@@ -840,6 +841,7 @@ mod test {
                 y,
             },
             spin: BotSpin::None,
+            hold: false,
         }
     }
 

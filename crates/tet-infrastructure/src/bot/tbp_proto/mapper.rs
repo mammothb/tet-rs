@@ -90,7 +90,11 @@ pub fn bot_move_to_tbp(m: BotMove) -> TbpMove {
 pub fn tbp_move_to_bot(m: TbpMove) -> Result<BotMove, BotError> {
     let spin = tbp_spin_to_bot(m.spin)?;
     let location = tbp_piece_location_to_bot(m.location)?;
-    Ok(BotMove { location, spin })
+    Ok(BotMove {
+        location,
+        spin,
+        hold: false,
+    })
 }
 
 // ============ PieceLocation conversion ============
@@ -399,6 +403,7 @@ mod test {
         let m = BotMove {
             location: piece_loc(MinoType::I, Orientation::North, 4, 19),
             spin: BotSpin::None,
+            hold: false,
         };
         let t = bot_move_to_tbp(m);
         assert_eq!(t.location.x, 4);
@@ -411,6 +416,7 @@ mod test {
         let m = BotMove {
             location: piece_loc(MinoType::O, Orientation::South, 3, 18),
             spin: BotSpin::None,
+            hold: false,
         };
         let t = bot_move_to_tbp(m);
         assert_eq!(t.location.x, 5);
@@ -423,6 +429,7 @@ mod test {
         let original = BotMove {
             location: piece_loc(MinoType::I, Orientation::North, 4, 19),
             spin: BotSpin::None,
+            hold: false,
         };
         let t = bot_move_to_tbp(original);
         let m = tbp_move_to_bot(t).unwrap();
