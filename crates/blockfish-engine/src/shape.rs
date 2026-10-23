@@ -13,7 +13,7 @@ pub struct ShapeTable {
 
 impl ShapeTable {
     /// Finds the shape for color `color`, if it exists in the table.
-    pub fn shape(&self, color: Color) -> Option<ShapeRef> {
+    pub fn shape(&self, color: Color) -> Option<ShapeRef<'_>> {
         let data = self.shapes.get(&color)?;
         Some(ShapeRef(&self, data, color))
     }

@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use async_trait::async_trait;
 use tet_application::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport, PlayerSnapshot};
 use tet_domain::{Board, Cell, MinoType, Orientation, Ruleset};

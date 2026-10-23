@@ -169,6 +169,10 @@ impl GameSession {
 }
 
 pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
+    if mv.hold {
+        tick::try_hold(player);
+    }
+
     // 1. Convert TBP true-rotation-center → bbox-anchor position.
     //    `MinoType::tbp_center_for` is a static lookup in the domain.
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
