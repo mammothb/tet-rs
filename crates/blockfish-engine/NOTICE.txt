@@ -1,0 +1,4 @@
+Vendored from https://github.com/blockfish/blockfish
+
+Original author: iitalics <iitalics@gmail.com>, mystery <mystery#3553>
+Modified: [2026-10-23] - stripped unused features (protobuf, service binary, block-stacker)
