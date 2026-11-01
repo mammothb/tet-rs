@@ -3,6 +3,8 @@
 use std::iter;
 
 use async_trait::async_trait;
+use std::time::Instant;
+
 use tet_application::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport, PlayerSnapshot};
 use tet_domain::{Board, Cell, MinoType, Orientation, Ruleset};
 
@@ -56,23 +58,44 @@ impl BotTransport for BlockfishBot {
         let Some(snapshot) = self.snapshot.take() else {
             return Ok(vec![]);
         };
-        let state = blockfish::State::from(snapshot);
+        let state = blockfish::State::from(snapshot.clone());
 
+        let started = Instant::now();
         let Some((_, trace)) =
             blockfish::ai::analyze(&self.shape_table, &self.config, state.clone())
         else {
+            tracing::debug!(target: "bot", "blockfish search found no move");
             return Ok(vec![]);
         };
 
         let placement =
             blockfish::ai::reconstruct_first_placement(&self.shape_table, state, &trace);
         let Some((color, transform, hold)) = placement else {
+            tracing::debug!(target: "bot", "blockfish placement could not be reconstructed");
             return Ok(vec![]);
         };
+        let search_ms = started.elapsed().as_millis() as u64;
 
         let kind = to_tet_mino_type(color);
         let orientation = to_tet_orientation(transform.2);
         let (x, y) = to_tet_center(kind, orientation, transform);
+
+        // One line per suggestion, with everything needed to diff the bot's
+        // model against the host's: the piece in play, the hold, the queue it
+        // saw, and the placement it wants.
+        tracing::debug!(
+            target: "bot",
+            in_play = %snapshot.queue.first().map_or('?', blockfish::Color::as_char),
+            hold = ?snapshot.hold.map(|c| c.as_char()),
+            queue = %queue_string(&snapshot.queue),
+            want_kind = %kind.as_char(),
+            want_orient = ?orientation,
+            want_x = x,
+            want_y = y,
+            did_hold = hold,
+            search_ms,
+            "blockfish suggestion",
+        );
 
         Ok(vec![BotMove {
             location: BotPieceLocation {
@@ -103,6 +126,11 @@ fn to_bf_matrix(board: &Board) -> blockfish::BasicMatrix {
 
 fn to_bf_color(kind: MinoType) -> blockfish::Color {
     blockfish::Color::try_from(kind.as_char()).expect("mino always map to alphabet")
+}
+
+/// The queue as a compact string, e.g. `"SJTOL"`.
+fn queue_string(queue: &[blockfish::Color]) -> String {
+    queue.iter().map(blockfish::Color::as_char).collect()
 }
 
 /// Pack a player snapshot into the format blockfish's search expects.

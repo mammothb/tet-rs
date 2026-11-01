@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex, mpsc};
 
-use tet_application::{BotError, BotMove, BotTransport, PlayerSnapshot};
+use tet_application::{BotError, BotMove, BotTransport, GameTime, PlayerSnapshot};
 use tokio::sync::{mpsc as tmpsc, oneshot};
 
 /// Send requests to a bot's worker. Cloning is cheap (channel senders clone).
@@ -38,7 +38,16 @@ pub enum BotResponse {
 
 /// In-flight `Suggest` reply. The receiver stays in the main thread's pending
 /// list until the worker sends through it (or we drop the slot on cleanup).
-pub type PendingSuggest = (usize, oneshot::Receiver<Result<Vec<BotMove>, BotError>>);
+///
+/// The `GameTime` is the game clock reading when the request went out, so the
+/// age of the answer can be logged. Game time, not frames: the render loop is
+/// not vsync-capped, so a frame count would measure the frame rate rather than
+/// the latency.
+pub type PendingSuggest = (
+    usize,
+    GameTime,
+    oneshot::Receiver<Result<Vec<BotMove>, BotError>>,
+);
 
 /// Spawn one worker task per bot.
 ///

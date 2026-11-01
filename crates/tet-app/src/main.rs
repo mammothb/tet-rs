@@ -154,19 +154,31 @@ async fn main() {
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {
-            if !pending_suggests.iter().any(|(idx, _)| idx == session_idx) {
+            if !pending_suggests
+                .iter()
+                .any(|(idx, _, _)| idx == session_idx)
+            {
                 let snap = session.snapshot(*session_idx);
                 handle.req_tx.send(BotRequest::Update(snap)).ok();
                 let (reply_tx, reply_rx) = oneshot::channel();
                 handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
-                pending_suggests.push((*session_idx, reply_rx));
+                // Remember when the request went out, so the age of the
+                // answer is visible.
+                pending_suggests.push((*session_idx, now, reply_rx));
             }
         }
 
         // Apply any completed bot moves
         let mut completed = Vec::new();
-        pending_suggests.retain_mut(|(idx, rx)| match rx.try_recv() {
+        pending_suggests.retain_mut(|(idx, sent_at, rx)| match rx.try_recv() {
             Ok(Ok(moves)) => {
+                let age_ms = now.saturating_millis_since(*sent_at);
+                tracing::debug!(
+                    target: "bot",
+                    player = idx,
+                    age_ms,
+                    "bot suggestion received",
+                );
                 completed.push((*idx, moves));
                 false
             }
@@ -178,11 +190,30 @@ async fn main() {
         });
         for (idx, moves) in completed {
             for mv in moves {
-                if session::apply_bot_move(&mut session.players[idx], mv).is_some() {
-                    // Lock through the session so a line clear attacks the
-                    // opponents.
-                    session.lock_piece(idx);
-                    break;
+                match session::apply_bot_move(&mut session.players[idx], mv) {
+                    Some(piece) => {
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            kind = %piece.kind.as_char(),
+                            orientation = ?piece.orientation,
+                            pos = ?piece.pos,
+                            "bot move applied",
+                        );
+                        // Lock through the session so a line clear attacks the
+                        // opponents.
+                        session.lock_piece(idx);
+                        break;
+                    }
+                    None => {
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            kind = %mv.location.kind.as_char(),
+                            orientation = ?mv.location.orientation,
+                            "bot move rejected: placement collides",
+                        );
+                    }
                 }
             }
         }
