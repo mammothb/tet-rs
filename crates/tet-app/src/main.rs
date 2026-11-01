@@ -12,13 +12,14 @@ use std::{path::Path, time::Instant};
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
+use tet_infrastructure::bot::blockfish::BlockfishBot;
 use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
 use tokio::sync::oneshot;
 
-use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest};
+use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest, spawn_bot_worker};
 use crate::display::{parse_grid_style, resolve_skin_path};
 use crate::input::{ControlKeys, collect_input_state};
 use crate::settings::{ControlSettings, Settings};
@@ -65,7 +66,7 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
 
 #[macroquad::main("tet-rs")]
 async fn main() {
-    let _runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
         .build()
@@ -98,7 +99,17 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let bot_handles: Vec<(usize, BotHandle)> = Vec::new();
+    let mut bot_handles: Vec<(usize, BotHandle)> = Vec::new();
+
+    let bf_bot = Box::new(BlockfishBot::new());
+    let bf_bot_handle = spawn_bot_worker(runtime.handle(), bf_bot);
+    let (_, bf_bot_queue_rng) = SmallRng::new(None);
+    let (_, bf_bot_attack_rng) = SmallRng::new(None);
+    let bf_bot_idx = session.add_player(Player::new_bot(
+        Box::new(bf_bot_queue_rng),
+        Box::new(bf_bot_attack_rng),
+    ));
+    bot_handles.push((bf_bot_idx, bf_bot_handle));
 
     let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
     let game_start = Instant::now();
@@ -143,27 +154,66 @@ async fn main() {
 
         // For each bot: send update + suggest (non-blocking)
         for (session_idx, handle) in &bot_handles {
-            let snap = session.snapshot(*session_idx);
-            handle.req_tx.send(BotRequest::Update(snap)).ok();
-            let (reply_tx, reply_rx) = oneshot::channel();
-            handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
-            pending_suggests.push((*session_idx, reply_rx));
+            if !pending_suggests
+                .iter()
+                .any(|(idx, _, _)| idx == session_idx)
+            {
+                let snap = session.snapshot(*session_idx);
+                handle.req_tx.send(BotRequest::Update(snap)).ok();
+                let (reply_tx, reply_rx) = oneshot::channel();
+                handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
+                // Remember when the request went out, so the age of the
+                // answer is visible.
+                pending_suggests.push((*session_idx, now, reply_rx));
+            }
         }
 
         // Apply any completed bot moves
-        let completed: Vec<_> = pending_suggests
-            .drain(..)
-            .filter_map(|(idx, mut rx)| match rx.try_recv() {
-                Ok(Ok(moves)) => Some((idx, moves)),
-                _ => None,
-            })
-            .collect();
+        let mut completed = Vec::new();
+        pending_suggests.retain_mut(|(idx, sent_at, rx)| match rx.try_recv() {
+            Ok(Ok(moves)) => {
+                let age_ms = now.saturating_millis_since(*sent_at);
+                tracing::debug!(
+                    target: "bot",
+                    player = idx,
+                    age_ms,
+                    "bot suggestion received",
+                );
+                completed.push((*idx, moves));
+                false
+            }
+            Ok(Err(err)) => {
+                eprintln!("{err}");
+                false
+            }
+            Err(_) => true,
+        });
         for (idx, moves) in completed {
             for mv in moves {
-                if session::apply_bot_move(&mut session.players[idx], mv, &session.ruleset)
-                    .is_some()
-                {
-                    break;
+                match session::apply_bot_move(&mut session.players[idx], mv) {
+                    Some(piece) => {
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            kind = %piece.kind.as_char(),
+                            orientation = ?piece.orientation,
+                            pos = ?piece.pos,
+                            "bot move applied",
+                        );
+                        // Lock through the session so a line clear attacks the
+                        // opponents.
+                        session.lock_piece(idx);
+                        break;
+                    }
+                    None => {
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            kind = %mv.location.kind.as_char(),
+                            orientation = ?mv.location.orientation,
+                            "bot move rejected: placement collides",
+                        );
+                    }
                 }
             }
         }

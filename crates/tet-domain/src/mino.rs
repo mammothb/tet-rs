@@ -39,13 +39,13 @@ impl MinoType {
     pub const SIZE: usize = 7;
 
     pub const ALL: [MinoType; MinoType::SIZE] = [
-        MinoType::I,
-        MinoType::O,
-        MinoType::T,
         MinoType::L,
         MinoType::J,
         MinoType::S,
         MinoType::Z,
+        MinoType::T,
+        MinoType::I,
+        MinoType::O,
     ];
 
     #[must_use]
@@ -58,6 +58,19 @@ impl MinoType {
             MinoType::T => &MINO_T,
             MinoType::I => &MINO_I,
             MinoType::O => &MINO_O,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_char(self) -> char {
+        match self {
+            MinoType::J => 'J',
+            MinoType::L => 'L',
+            MinoType::S => 'S',
+            MinoType::Z => 'Z',
+            MinoType::T => 'T',
+            MinoType::I => 'I',
+            MinoType::O => 'O',
         }
     }
 
@@ -79,13 +92,13 @@ impl MinoType {
     #[must_use]
     pub const fn from_char(c: char) -> Option<Self> {
         match c {
-            'I' => Some(MinoType::I),
-            'O' => Some(MinoType::O),
-            'T' => Some(MinoType::T),
-            'S' => Some(MinoType::S),
-            'Z' => Some(MinoType::Z),
             'J' => Some(MinoType::J),
             'L' => Some(MinoType::L),
+            'S' => Some(MinoType::S),
+            'Z' => Some(MinoType::Z),
+            'T' => Some(MinoType::T),
+            'I' => Some(MinoType::I),
+            'O' => Some(MinoType::O),
             _ => None,
         }
     }
@@ -97,14 +110,14 @@ impl MinoType {
             (MinoType::J | MinoType::L | MinoType::S | MinoType::Z | MinoType::T, _) => {
                 Vec2::new(1, 1)
             }
-            (MinoType::O, 0) => Vec2::new(1, 1),
-            (MinoType::O, 1) => Vec2::new(1, 2),
-            (MinoType::O, 2) => Vec2::new(2, 2),
-            (MinoType::O, 3) => Vec2::new(1, 1),
             (MinoType::I, 0) => Vec2::new(0, 1),
             (MinoType::I, 1) => Vec2::new(1, 2),
             (MinoType::I, 2) => Vec2::new(2, 1),
             (MinoType::I, 3) => Vec2::new(1, 0),
+            (MinoType::O, 0) => Vec2::new(1, 1),
+            (MinoType::O, 1) => Vec2::new(1, 2),
+            (MinoType::O, 2) => Vec2::new(2, 2),
+            (MinoType::O, 3) => Vec2::new(1, 1),
             _ => unreachable!(),
         }
     }

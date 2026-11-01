@@ -1,7 +1,7 @@
 use tet_domain::{Board, Cell, MinoType, Orientation, Rotation, Ruleset, Vec2, v2};
 
 use crate::piece::Piece;
-use crate::player::{Phase, Player};
+use crate::player::{PendingGarbage, Phase, Player};
 use crate::time::GameTime;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -97,7 +97,13 @@ pub fn try_lock(player: &mut Player) -> TickResult {
 }
 
 pub fn post_lock(player: &mut Player, result: &TickResult, ruleset: &Ruleset) {
-    cancel_pending_garbage(player, result.lines_cleared);
+    if result.lines_cleared > 0 {
+        // A clearing lock cancels queued garbage instead of letting it land.
+        cancel_pending_garbage(player, result.lines_cleared);
+    } else {
+        // Garbage lands on a lock that does not clear lines.
+        insert_pending_garbage(player);
+    }
     update_score(player, result, ruleset);
     spawn_next_piece(player);
     if check_topout(player) {
@@ -105,18 +111,34 @@ pub fn post_lock(player: &mut Player, result: &TickResult, ruleset: &Ruleset) {
     }
 }
 
+/// Cancel `to_cancel` rows of queued garbage, oldest attack first.
+///
+/// A lock that clears lines cancels incoming garbage instead of letting it
+/// land. FIFO: the oldest queued attack is eaten first — it is the one that
+/// would have arrived next.
 pub fn cancel_pending_garbage(player: &mut Player, mut to_cancel: u8) {
     while to_cancel > 0 {
-        let Some(top) = player.garbage.pending.last_mut() else {
+        let Some(&PendingGarbage { count, .. }) = player.garbage.pending.first() else {
             break;
         };
-        if top.count <= to_cancel {
-            to_cancel -= top.count;
-            player.garbage.pending.pop();
+        if count <= to_cancel {
+            to_cancel -= count;
+            player.garbage.pending.remove(0);
         } else {
-            top.count -= to_cancel;
+            player.garbage.pending[0].count -= to_cancel;
             to_cancel = 0;
         }
+    }
+}
+
+/// Insert every queued garbage attack into the board, oldest first.
+///
+/// Each attack is pushed on at the bottom, so inserting oldest-first leaves the
+/// newest attack lowest — the same board as if the attacks had arrived one
+/// after another.
+pub fn insert_pending_garbage(player: &mut Player) {
+    for attack in player.garbage.pending.drain(..) {
+        player.board.insert_garbage(attack.count, attack.hole);
     }
 }
 
@@ -275,9 +297,7 @@ mod test {
     use rstest::rstest;
     use tet_domain::{Board, Queue, Rng};
 
-    use crate::player::{Controller, GarbageState, PendingGarbage, ScoreState};
-    use crate::ports::bot::{BotError, BotMove, BotTransport};
-    use crate::snapshot::PlayerSnapshot;
+    use crate::player::{GarbageState, PendingGarbage, ScoreState};
 
     // -------- test fixtures --------
 
@@ -319,31 +339,13 @@ mod test {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
-            controller: Controller::Bot(Box::new(NoopBot)),
+            bot_controlled: false,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng: Box::new(StubRng::counter()),
             },
             last_gravity_at: GameTime::ZERO,
         }
-    }
-
-    /// Stub `BotTransport` that does nothing. Needed only to fill the
-    /// `Controller::Bot` variant for `t_player`. Not used in any test.
-    struct NoopBot;
-
-    #[async_trait::async_trait]
-    impl BotTransport for NoopBot {
-        fn start(&mut self, _ruleset: &Ruleset) -> Result<(), BotError> {
-            Ok(())
-        }
-        async fn update(&mut self, _snapshot: &PlayerSnapshot) -> Result<(), BotError> {
-            Ok(())
-        }
-        async fn suggest(&mut self) -> Result<Vec<BotMove>, BotError> {
-            Ok(Vec::new())
-        }
-        async fn stop(&mut self) {}
     }
 
     // -------- step_gravity --------
@@ -459,50 +461,111 @@ mod test {
         assert_eq!(result.lines_cleared, 1);
     }
 
-    // -------- cancel_pending_garbage --------
+    // -------- cancel_pending_garbage (FIFO) --------
 
     #[rstest]
-    fn cancel_pending_garbage_removes_whole_attack_when_small() {
+    fn cancel_pending_garbage_removes_whole_oldest_attack() {
         let mut p = t_player();
-        p.garbage.pending.push(PendingGarbage {
-            count: 2,
-            hole: 0,
-            arrives_at: GameTime::from_millis(100),
-        });
-        p.garbage.pending.push(PendingGarbage {
-            count: 1,
-            hole: 0,
-            arrives_at: GameTime::from_millis(100),
-        });
+        p.garbage.pending.push(PendingGarbage { count: 2, hole: 0 });
+        p.garbage.pending.push(PendingGarbage { count: 1, hole: 0 });
         cancel_pending_garbage(&mut p, 2);
+        // The oldest attack is eaten first.
         assert_eq!(p.garbage.pending.len(), 1);
         assert_eq!(p.garbage.pending[0].count, 1);
     }
 
     #[rstest]
-    fn cancel_pending_garbage_truncates_last_attack() {
+    fn cancel_pending_garbage_truncates_oldest_attack() {
         let mut p = t_player();
-        p.garbage.pending.push(PendingGarbage {
-            count: 4,
-            hole: 0,
-            arrives_at: GameTime::from_millis(100),
-        });
+        p.garbage.pending.push(PendingGarbage { count: 4, hole: 0 });
+        p.garbage.pending.push(PendingGarbage { count: 3, hole: 0 });
         cancel_pending_garbage(&mut p, 2);
-        assert_eq!(p.garbage.pending.len(), 1);
+        assert_eq!(p.garbage.pending.len(), 2);
         assert_eq!(p.garbage.pending[0].count, 2);
+        assert_eq!(p.garbage.pending[1].count, 3);
+    }
+
+    #[rstest]
+    fn cancel_pending_garbage_spans_multiple_attacks_fifo() {
+        let mut p = t_player();
+        p.garbage.pending.push(PendingGarbage { count: 4, hole: 0 });
+        p.garbage.pending.push(PendingGarbage { count: 2, hole: 0 });
+        // Rule 5: 3 + 3 lines cleared cancels 6 rows — the whole queue.
+        cancel_pending_garbage(&mut p, 3);
+        assert_eq!(p.garbage.pending.len(), 2);
+        assert_eq!(p.garbage.pending[0].count, 1);
+        cancel_pending_garbage(&mut p, 3);
+        assert!(p.garbage.pending.is_empty());
     }
 
     #[rstest]
     fn cancel_pending_garbage_no_op_when_to_cancel_is_zero() {
         let mut p = t_player();
-        p.garbage.pending.push(PendingGarbage {
-            count: 3,
-            hole: 0,
-            arrives_at: GameTime::from_millis(100),
-        });
+        p.garbage.pending.push(PendingGarbage { count: 3, hole: 0 });
         cancel_pending_garbage(&mut p, 0);
         assert_eq!(p.garbage.pending.len(), 1);
         assert_eq!(p.garbage.pending[0].count, 3);
+    }
+
+    // -------- insert_pending_garbage --------
+
+    #[rstest]
+    fn insert_pending_garbage_inserts_every_attack_and_empties_queue() {
+        let mut p = t_player();
+        p.garbage.pending.push(PendingGarbage { count: 1, hole: 0 });
+        p.garbage.pending.push(PendingGarbage { count: 2, hole: 5 });
+        insert_pending_garbage(&mut p);
+        assert!(p.garbage.pending.is_empty());
+        // Oldest attack first, so the newest attack ends up lowest:
+        // rows 0-1 = newest attack (hole 5), row 2 = oldest attack (hole 0).
+        assert_eq!(p.board.get(v2![5, 0]), Cell::Empty);
+        assert_eq!(p.board.get(v2![0, 0]), Cell::Garbage);
+        assert_eq!(p.board.get(v2![5, 1]), Cell::Empty);
+        assert_eq!(p.board.get(v2![0, 1]), Cell::Garbage);
+        assert_eq!(p.board.get(v2![0, 2]), Cell::Empty);
+        assert_eq!(p.board.get(v2![1, 2]), Cell::Garbage);
+    }
+
+    #[rstest]
+    fn insert_pending_garbage_no_op_when_queue_empty() {
+        let mut p = t_player();
+        insert_pending_garbage(&mut p);
+        assert!(
+            p.board
+                .rows()
+                .all(|row| row.iter().all(|c| *c == Cell::Empty))
+        );
+    }
+
+    // -------- post_lock: garbage delivery --------
+
+    #[rstest]
+    fn post_lock_inserts_garbage_on_a_non_clearing_lock() {
+        let mut p = t_player();
+        p.garbage.pending.push(PendingGarbage { count: 1, hole: 0 });
+        let result = TickResult {
+            lines_cleared: 0,
+            tspin: TSpinStatus::None,
+            piece_locked: true,
+        };
+        post_lock(&mut p, &result, &Ruleset::guideline());
+        assert!(p.garbage.pending.is_empty());
+        assert_eq!(p.board.get(v2![1, 0]), Cell::Garbage);
+    }
+
+    #[rstest]
+    fn post_lock_does_not_insert_garbage_on_a_clearing_lock() {
+        let mut p = t_player();
+        p.garbage.pending.push(PendingGarbage { count: 1, hole: 0 });
+        let result = TickResult {
+            lines_cleared: 2,
+            tspin: TSpinStatus::None,
+            piece_locked: true,
+        };
+        post_lock(&mut p, &result, &Ruleset::guideline());
+        // The clear cancelled the queued rows instead.
+        assert!(p.garbage.pending.is_empty());
+        assert_eq!(p.board.get(v2![1, 0]), Cell::Empty);
     }
 
     // -------- spawn_next_piece --------

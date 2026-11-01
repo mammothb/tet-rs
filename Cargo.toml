@@ -8,6 +8,7 @@ rust-version = "1.95.0"
 license = "LGPL-2.1-or-later"
 
 [workspace.dependencies]
+blockfish = { path = "crates/blockfish-engine" }
 tet-application = { path = "crates/tet-application" }
 tet-domain = { path = "crates/tet-domain" }
 tet-infrastructure = { path = "crates/tet-infrastructure" }
@@ -18,12 +19,9 @@ macroquad = { version = "0.4.16" }
 rand = { version = "0.10.3" }
 serde = { version = "1.0.229" }
 serde_json = { version = "1.0.151" }
-tbp = { version = "3.0.0" }
 thiserror = { version = "2.0.21" }
 tokio = { version = "1.53.1", features = [
-  "io-util",
   "macros",
-  "process",
   "rt-multi-thread",
   "sync"
 ] }

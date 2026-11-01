@@ -5,11 +5,9 @@
 //! protocol. Each worker runs on a tokio task; the main thread communicates
 //! via channels and never blocks on bot I/O.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
-use tet_application::{BotError, BotMove, BotTransport, PlayerSnapshot};
-use tet_infrastructure::BotSubprocess;
+use tet_application::{BotError, BotMove, BotTransport, GameTime, PlayerSnapshot};
 use tokio::sync::{mpsc as tmpsc, oneshot};
 
 /// Send requests to a bot's worker. Cloning is cheap (channel senders clone).
@@ -40,14 +38,25 @@ pub enum BotResponse {
 
 /// In-flight `Suggest` reply. The receiver stays in the main thread's pending
 /// list until the worker sends through it (or we drop the slot on cleanup).
-pub type PendingSuggest = (usize, oneshot::Receiver<Result<Vec<BotMove>, BotError>>);
+///
+/// The `GameTime` is the game clock reading when the request went out, so the
+/// age of the answer can be logged. Game time, not frames: the render loop is
+/// not vsync-capped, so a frame count would measure the frame rate rather than
+/// the latency.
+pub type PendingSuggest = (
+    usize,
+    GameTime,
+    oneshot::Receiver<Result<Vec<BotMove>, BotError>>,
+);
 
 /// Spawn one worker task per bot.
 ///
 /// `bot_path: PathBuf` (owned) because the spawned async task is `'static`
 /// — it must own all its captured data, no borrows from the caller.
-#[allow(dead_code, unused_variables)] // Scaffold: wired by main.rs when bots are enabled.
-pub fn spawn_bot_worker(runtime: &tokio::runtime::Handle, bot_path: PathBuf) -> BotHandle {
+pub fn spawn_bot_worker(
+    runtime: &tokio::runtime::Handle,
+    bot: Box<dyn BotTransport + Send>,
+) -> BotHandle {
     // Request channel: worker awaits, main sends (non-blocking).
     // `tokio::sync::mpsc` because the worker's `recv()` is async.
     let (req_tx, mut req_rx) = tmpsc::unbounded_channel::<BotRequest>();
@@ -57,7 +66,7 @@ pub fn spawn_bot_worker(runtime: &tokio::runtime::Handle, bot_path: PathBuf) -> 
     let resp_rx = Arc::new(Mutex::new(resp_rx));
 
     runtime.spawn(async move {
-        let mut bot = BotSubprocess::spawn(&bot_path).await?;
+        let mut bot = bot;
         while let Some(req) = req_rx.recv().await {
             match req {
                 BotRequest::Update(snap) => match bot.update(&snap).await {

@@ -1,1 +1,1 @@
-pub mod tbp_proto;
+pub mod blockfish;

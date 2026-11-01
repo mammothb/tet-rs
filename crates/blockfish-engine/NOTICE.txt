@@ -1,0 +1,9 @@
+Vendored from https://github.com/iitalics/blockfish @ 739953f
+
+Original authors: iitalics <iitalics@gmail.com>, mystery <mystery#3553>
+Licence: LGPL-2.1-or-later, see LICENSE.txt
+
+Modified 2026-10-23:
+  - stripped unused binaries, features and optional dependencies
+  - moved the SRS shape table into the crate (data unchanged)
+  - added a synchronous search API: ai::analyze, ai::reconstruct_first_placement
