@@ -104,7 +104,7 @@ impl GameSession {
             }
             Input::HardDrop => {
                 let result = tick::hard_drop(&mut self.players[idx]);
-                tick::post_lock(&mut self.players[idx], &result, &self.ruleset);
+                self.finish_lock(idx, &result);
                 Some(result)
             }
         }
@@ -132,82 +132,84 @@ impl GameSession {
         self.players.iter().all(|p| p.phase == Phase::GameOver)
     }
 
+    /// Lock the player's current piece and send the attack the clear produced.
+    ///
+    /// Every lock goes through here or through `step_player`'s auto-lock, so
+    /// a line clear always produces an attack. Locking outside the session
+    /// would silently drop the attack.
+    pub fn lock_piece(&mut self, idx: usize) -> Option<TickResult> {
+        let result = tick::try_lock(&mut self.players[idx]);
+        self.finish_lock(idx, &result);
+        Some(result)
+    }
+
+    /// Finish a lock: score it, spawn the next piece, send the attack.
+    fn finish_lock(&mut self, idx: usize, result: &TickResult) {
+        tick::post_lock(&mut self.players[idx], result, &self.ruleset);
+        self.distribute_attack(idx, result);
+    }
+
+    /// Queue the attack a lock produced for every opponent.
+    fn distribute_attack(&mut self, idx: usize, result: &TickResult) {
+        let count = ATTACK_FOR_LINES[result.lines_cleared as usize]; // 0, 1, 2, 4
+        if count == 0 {
+            return;
+        }
+        let num_cols = u32::try_from(self.ruleset.num_cols).expect("board width fits in u32");
+        let hole = u8::try_from(self.players[idx].garbage.attack_rng.next_u32() % num_cols)
+            .expect("hole column fits in u8");
+        let atk = PendingGarbage { count, hole };
+        for opp in 0..self.players.len() {
+            if opp != idx {
+                self.players[opp].garbage.pending.push(atk);
+            }
+        }
+    }
+
     /// Queue the attacks produced by this frame's line clears.
     ///
     /// The attack lands on the victim's next lock that does not clear lines,
     /// or is cancelled by a lock that does.
     fn distribute_garbage(&mut self, results: &[TickResult]) {
-        let num_cols = u32::try_from(self.ruleset.num_cols).expect("board width fits in u32");
-        let n = self.players.len();
-        let mut pending: Vec<(usize, PendingGarbage)> = Vec::new();
-        for (idx, r) in results.iter().enumerate() {
-            let count = ATTACK_FOR_LINES[r.lines_cleared as usize]; // 0, 1, 2, 4
-            if count == 0 {
-                continue;
-            }
-            let hole = u8::try_from(self.players[idx].garbage.attack_rng.next_u32() % num_cols)
-                .expect("hole column fits in u8");
-            let atk = PendingGarbage { count, hole };
-            for opp in 0..n {
-                if opp != idx {
-                    pending.push((opp, atk));
-                }
-            }
-        }
-        for (opp, atk) in pending {
-            self.players[opp].garbage.pending.push(atk);
+        for (idx, result) in results.iter().enumerate() {
+            self.distribute_attack(idx, result);
         }
     }
 }
 
-pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Option<Piece> {
+/// Apply a bot's suggested placement.
+///
+/// The bot hands over a final position and orientation — a *state*, not a move
+/// sequence. The host places the piece there; no rotation is simulated and no
+/// SRS kicks are consulted. That works because the bot's placement is
+/// reachable by construction: blockfish builds every placement from the spawn
+/// with real moves, so the position it asks for is one the piece can legally
+/// occupy.
+///
+/// Returns `None` when the placement collides with the board. The board can
+/// only have moved under the bot if the garbage model is broken, so this is a
+/// safety net rather than a normal outcome.
+pub fn apply_bot_move(player: &mut Player, mv: BotMove) -> Option<Piece> {
     if mv.hold {
         tick::try_hold(player);
     }
 
-    // 1. Convert the bot's rotation-center position → bbox-anchor position.
-    //    `MinoType::rotation_center_offset` is the domain's implementation of
-    //    the rotation-center convention (see `ports::bot::BotPieceLocation`).
+    // Convert the bot's rotation-center position → bbox-anchor position.
+    // `MinoType::rotation_center_offset` is the domain's implementation of
+    // the rotation-center convention (see `ports::bot::BotPieceLocation`).
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
     let pos = v2![mv.location.x, mv.location.y] - center;
 
-    let target = mv.location.orientation;
-    let curr_orient = player.current.orientation;
-    let orig_orient = curr_orient;
+    let orig_orient = player.current.orientation;
     let orig_pos = player.current.pos;
 
-    // 2. No rotation: just check the position.
-    if target == curr_orient {
-        player.current.pos = pos;
-        if !player.board.collides(&player.current.cells()) {
-            return Some(player.current);
-        }
-        player.current.orientation = orig_orient;
-        player.current.pos = orig_pos;
-        return None;
+    player.current.orientation = mv.location.orientation;
+    player.current.pos = pos;
+    if !player.board.collides(&player.current.cells()) {
+        return Some(player.current);
     }
 
-    // 3. Determine rotation direction (CW or CCW) from current → target.
-    let rot = if curr_orient.rotate(Rotation::CW) == target {
-        Rotation::CW
-    } else if curr_orient.rotate(Rotation::CCW) == target {
-        Rotation::CCW
-    } else {
-        // 180° rotation isn't valid in SRS.
-        return None;
-    };
-
-    // 4. Try each SRS kick offset.
-    let kicks = ruleset.kicks(mv.location.kind, target, rot);
-    for kick in kicks {
-        player.current.orientation = target;
-        player.current.pos = pos + *kick;
-        if !player.board.collides(&player.current.cells()) {
-            return Some(player.current);
-        }
-    }
-
-    // 5. All kicks failed — revert and return None.
+    // Placement is not legal — put the piece back where it was.
     player.current.orientation = orig_orient;
     player.current.pos = orig_pos;
     None
@@ -269,7 +271,7 @@ mod test {
 
             // Try each move in preference order; first valid one wins.
             for mv in moves {
-                if apply_bot_move(&mut self.players[idx], mv, &self.ruleset).is_some() {
+                if apply_bot_move(&mut self.players[idx], mv).is_some() {
                     return;
                 }
             }
@@ -343,6 +345,7 @@ mod test {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
+            bot_controlled: false,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng: Box::new(StubRng::counter()),
@@ -493,6 +496,63 @@ mod test {
         session.players[0].phase = Phase::GameOver;
         session.players[1].phase = Phase::GameOver;
         assert!(session.is_finished());
+    }
+
+    // -------- attack wiring --------
+
+    /// Two rows with a two-wide gap at columns 8-9, so an O piece completes
+    /// both of them.
+    fn setup_two_gap_rows(player: &mut Player) {
+        for y in 0..2 {
+            for x in 0..8 {
+                player.board.set(v2![x, y], Cell::Garbage);
+            }
+        }
+    }
+
+    /// A lock that clears lines must attack the opponents, whichever path
+    /// locked the piece.
+    #[rstest]
+    fn lock_piece_clearing_lines_attacks_the_opponent() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        setup_two_gap_rows(&mut session.players[0]);
+        // The bot places the piece that is in play — an O here.
+        session.players[0].current = Piece::spawn(MinoType::O);
+        // O North center offset is (1, 1), so center (8, 0) puts the cells at
+        // (8, 0), (9, 0), (8, 1), (9, 1).
+        let mv = bot_move(MinoType::O, Orientation::North, 8, 0);
+        assert!(apply_bot_move(&mut session.players[0], mv).is_some());
+        session.lock_piece(0);
+        // Two lines cleared → one garbage row for the opponent.
+        assert_eq!(session.players[1].garbage.pending.len(), 1);
+        assert_eq!(session.players[1].garbage.pending[0].count, 1);
+    }
+
+    /// Same for the human's hard drop.
+    #[rstest]
+    fn hard_drop_clearing_lines_attacks_the_opponent() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        setup_two_gap_rows(&mut session.players[0]);
+        // Put the O piece above the gap.
+        session.players[0].current = Piece::spawn(MinoType::O);
+        session.players[0].current.pos = v2![7, -1];
+        session.apply_input(0, Input::HardDrop, GameTime::ZERO);
+        assert_eq!(session.players[1].garbage.pending.len(), 1);
+        assert_eq!(session.players[1].garbage.pending[0].count, 1);
+    }
+
+    /// A lock that clears no lines attacks nobody.
+    #[rstest]
+    fn lock_piece_without_clearing_attacks_nobody() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        session.lock_piece(0);
+        assert!(session.players[1].garbage.pending.is_empty());
     }
 
     // -------- distribute_garbage --------
@@ -823,7 +883,7 @@ mod test {
         // T-piece spawns at bbox (3, 18); center at (4, 19).
         // Bot asks for T at center (5, 19) → bbox anchor (4, 18).
         let mv = bot_move(MinoType::T, Orientation::North, 5, 19);
-        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        let result = apply_bot_move(&mut p, mv);
         assert!(result.is_some());
         assert_eq!(p.current.orientation, Orientation::North);
         assert_eq!(p.current.pos, v2![4, 18]);
@@ -835,7 +895,7 @@ mod test {
         // T-piece spawns North, center at (4, 19). Bot asks for East, center (4, 19).
         // East bbox anchor = (4 - 1, 19 - 1) = (3, 18). Empty board, no collision.
         let mv = bot_move(MinoType::T, Orientation::East, 4, 19);
-        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        let result = apply_bot_move(&mut p, mv);
         assert!(result.is_some());
         assert_eq!(p.current.orientation, Orientation::East);
         assert_eq!(p.current.pos, v2![3, 18]);
@@ -845,21 +905,21 @@ mod test {
     fn apply_bot_move_ccw_rotation_succeeds() {
         let mut p = empty_player();
         let mv = bot_move(MinoType::T, Orientation::West, 4, 19);
-        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        let result = apply_bot_move(&mut p, mv);
         assert!(result.is_some());
         assert_eq!(p.current.orientation, Orientation::West);
         assert_eq!(p.current.pos, v2![3, 18]);
     }
 
     #[rstest]
-    fn apply_bot_move_180_degree_rotation_returns_none() {
+    fn apply_bot_move_180_degree_rotation_succeeds() {
         let mut p = empty_player();
-        // North → South is 180°, invalid in SRS.
+        // North → South is 180°. Orientation is a state, not an operation:
+        // the host places the piece, it does not simulate a rotation.
         let mv = bot_move(MinoType::T, Orientation::South, 4, 19);
-        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
-        assert!(result.is_none());
-        // State unchanged
-        assert_eq!(p.current.orientation, Orientation::North);
+        let result = apply_bot_move(&mut p, mv);
+        assert!(result.is_some());
+        assert_eq!(p.current.orientation, Orientation::South);
         assert_eq!(p.current.pos, v2![3, 18]);
     }
 
@@ -870,10 +930,28 @@ mod test {
         p.board.set(v2![3, 19], Cell::Block(MinoType::I));
         // Bot asks for T at center (4, 19) — same as spawn, but (3, 19) is taken.
         let mv = bot_move(MinoType::T, Orientation::North, 4, 19);
-        let result = apply_bot_move(&mut p, mv, &Ruleset::guideline());
+        let result = apply_bot_move(&mut p, mv);
         assert!(result.is_none());
         // State reverted
         assert_eq!(p.current.orientation, Orientation::North);
         assert_eq!(p.current.pos, v2![3, 18]);
+    }
+
+    #[rstest]
+    fn apply_bot_move_with_hold_swaps_the_piece_and_places_it() {
+        let mut p = empty_player();
+        // Hold slot holds an I piece.
+        p.hold = Some(MinoType::I);
+        let mut mv = bot_move(MinoType::I, Orientation::North, 4, 19);
+        mv.hold = true;
+        let result = apply_bot_move(&mut p, mv);
+        assert!(result.is_some());
+        // The held piece is now in play, at the requested position.
+        assert_eq!(p.current.kind, MinoType::I);
+        assert_eq!(p.current.orientation, Orientation::North);
+        // I North center offset is (0, 1) → bbox anchor (4, 18).
+        assert_eq!(p.current.pos, v2![4, 18]);
+        // The piece that was in play went into the hold slot.
+        assert_eq!(p.hold, Some(MinoType::T));
     }
 }

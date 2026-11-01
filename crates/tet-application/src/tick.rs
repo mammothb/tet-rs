@@ -339,6 +339,7 @@ mod test {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
+            bot_controlled: false,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng: Box::new(StubRng::counter()),

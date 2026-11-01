@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 //! Headless bot harness.
 //!
 //! Drives the real `GameSession` + real `BlockfishBot` with no renderer and
@@ -10,19 +12,19 @@
 //!   play after the move: the piece currently in play, or — when the bot asks
 //!   for a hold — the piece the hold brings up (the held piece, or the next
 //!   queue piece when the hold slot is empty).
-//! * **INV-3** when a move is applied, the cells that get locked are the
-//!   cells the bot asked for. If the requested placement is not reachable
-//!   (it overlaps the stack), the host may fall back to an SRS kick — that
-//!   case is counted, not asserted, and is fixed by the input-based
-//!   suggestion path.
+//! * **INV-3** the cells the host locks are the cells *blockfish* placed — not
+//!   the cells the host understood the bot to mean. The ground truth is
+//!   recomputed here with an independent snapshot build and search, so this
+//!   covers the whole adapter pipeline: snapshot construction, the search,
+//!   the placement reconstruction and the coordinate conversion.
 //!
 //! The per-piece `println!` trace and the summary counters are for humans;
 //! pass/fail comes from the assertions at the end of the run.
 
 use std::collections::HashSet;
 
-use tet_application::{BotMove, BotTransport, GameSession, Piece, Player, session, tick};
-use tet_domain::{MinoType, Ruleset, Vec2};
+use tet_application::{BotTransport, GameSession, GameTime, Player, PlayerSnapshot, session};
+use tet_domain::{Cell, Ruleset, Vec2};
 use tet_infrastructure::SmallRng;
 use tet_infrastructure::bot::blockfish::BlockfishBot;
 
@@ -36,6 +38,13 @@ const FAST_PIECES: usize = 10;
 /// Number of pieces played by the long test.
 const LONG_PIECES: usize = 200;
 
+/// Padding for the scratch matrix used to read a placement's cells back.
+const PAD: i16 = 5;
+
+/// Scratch matrix width. Must be wide enough for the widest shape (4) plus
+/// the padding on both sides.
+const SCRATCH_COLS: u16 = 15;
+
 /// Counters reported at the end of a run.
 #[derive(Debug, Default)]
 struct Stats {
@@ -47,28 +56,60 @@ struct Stats {
     applied: usize,
     /// Turns where the host rejected the bot's move.
     rejected: usize,
-    /// Turns where the requested placement overlapped the stack, so the host
-    /// had to fall back to an SRS kick.
-    unreachable_requests: usize,
+    /// Turns where the bot's placement overlapped the stack.
+    illegal_placements: usize,
 }
 
-/// The four cells the bot asked for, in tet-rs board coordinates.
+/// Blockfish's snapshot for a player state, rebuilt independently of the
+/// adapter.
 ///
-/// Mirrors the conversion `session::apply_bot_move` performs on the bot's
-/// TBP-style centre position.
-fn requested_cells(mv: BotMove) -> HashSet<(i8, i8)> {
-    let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
-    let pos = Vec2::new(mv.location.x - center.x, mv.location.y - center.y);
-    let piece = Piece {
-        kind: mv.location.kind,
-        orientation: mv.location.orientation,
-        pos,
-    };
-    piece.cells().into_iter().map(|c| (c.x, c.y)).collect()
+/// The queue rule is the adapter's: blockfish's `queue[0]` is the piece being
+/// placed *now*, so the piece in play leads.
+fn blockfish_snapshot(snap: &PlayerSnapshot) -> blockfish::Snapshot {
+    let mut queue = vec![snap.current.kind];
+    queue.extend_from_slice(&snap.queue);
+    let mut matrix = blockfish::BasicMatrix::with_cols(snap.board.num_cols().into());
+    for (i, row) in snap.board.rows().enumerate() {
+        for (j, &cell) in row.iter().enumerate() {
+            if cell != Cell::Empty {
+                matrix.set((i as u16, j as u16));
+            }
+        }
+    }
+    blockfish::Snapshot {
+        hold: snap
+            .hold
+            .map(|k| blockfish::Color::try_from(k.as_char()).unwrap()),
+        queue: queue
+            .iter()
+            .map(|k| blockfish::Color::try_from(k.as_char()).unwrap())
+            .collect(),
+        matrix,
+    }
+}
+
+/// The cells blockfish placed, in tet-rs board coordinates.
+fn blockfish_cells(
+    shtb: &blockfish::ShapeTable,
+    color: blockfish::Color,
+    tf: blockfish::Transform,
+) -> HashSet<(i8, i8)> {
+    let shape = shtb.shape(color).expect("colour has a shape");
+    let mut mat = blockfish::BasicMatrix::with_cols(SCRATCH_COLS);
+    shape.blit_to(&mut mat, (tf.0 + PAD, tf.1 + PAD, tf.2));
+    let mut cells = HashSet::new();
+    for i in 0..mat.rows() {
+        for j in 0..mat.cols() {
+            if mat.get((i, j)) {
+                cells.insert((j as i8 - PAD as i8, i as i8 - PAD as i8));
+            }
+        }
+    }
+    cells
 }
 
 /// Cells of a piece, as a set so ordering does not matter.
-fn cell_set(piece: Piece) -> HashSet<(i8, i8)> {
+fn cell_set(piece: tet_application::Piece) -> HashSet<(i8, i8)> {
     piece.cells().into_iter().map(|c| (c.x, c.y)).collect()
 }
 
@@ -78,7 +119,8 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
     let (_, queue_rng) = SmallRng::new(Some(42));
     let (_, attack_rng) = SmallRng::new(Some(43));
     let idx = session.add_player(Player::new_bot(Box::new(queue_rng), Box::new(attack_rng)));
-    let mut bot = BlockfishBot::with_config(config);
+    let mut bot = BlockfishBot::with_config(config.clone());
+    let shtb = blockfish::srs();
     let mut stats = Stats::default();
     let mut violations: Vec<String> = Vec::new();
     let mut failing_turns: Vec<usize> = Vec::new();
@@ -113,54 +155,73 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
             ));
         }
 
-        let requested = requested_cells(mv);
-        let requested_cells: Vec<Vec2> = requested.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
-        let requested_legal = !session.players[idx].board.collides(&requested_cells);
+        // Ground truth: blockfish's own placement for this state.
+        let truth = {
+            let bf_state = blockfish::State::from(blockfish_snapshot(&snap));
+            let trace = blockfish::ai::analyze(&shtb, &config, bf_state.clone())
+                .expect("ground-truth search found a move")
+                .1;
+            let (color, tf, did_hold) =
+                blockfish::ai::reconstruct_first_placement(&shtb, bf_state, &trace)
+                    .expect("ground-truth placement");
+            (color, tf, did_hold)
+        };
+        let (truth_color, truth_tf, truth_hold) = truth;
+        let truth_cells = blockfish_cells(&shtb, truth_color, truth_tf);
+        if truth_hold != mv.hold {
+            failing_turns.push(piece_no);
+            violations.push(format!(
+                "piece {piece_no}: bot says hold={} but blockfish says hold={}",
+                mv.hold, truth_hold,
+            ));
+        }
 
-        let applied = session::apply_bot_move(&mut session.players[idx], mv, &session.ruleset);
+        let truth_cells_vec: Vec<Vec2> =
+            truth_cells.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+        if session.players[idx].board.collides(&truth_cells_vec) {
+            stats.illegal_placements += 1;
+        }
+
+        let applied = session::apply_bot_move(&mut session.players[idx], mv);
         if let Some(piece) = applied {
-            if requested_legal {
-                // INV-3: what gets locked is exactly what was asked for.
-                if cell_set(piece) != requested {
-                    failing_turns.push(piece_no);
-                    violations.push(format!(
-                        "piece {piece_no}: host locked {:?} but the bot asked for {:?}",
-                        piece.cells(),
-                        requested_cells,
-                    ));
-                }
-            } else {
-                // The requested placement overlaps the stack; the host fell
-                // back to an SRS kick. Only require a legal placement.
-                assert!(
-                    !session.players[idx].board.collides(&piece.cells()),
-                    "piece {piece_no}: host applied an illegal placement",
-                );
-                stats.unreachable_requests += 1;
+            // INV-3: the locked cells are the cells blockfish placed.
+            if cell_set(piece) != truth_cells {
+                failing_turns.push(piece_no);
+                violations.push(format!(
+                    "piece {piece_no}: host locked {:?} but blockfish placed {:?}",
+                    piece.cells(),
+                    truth_cells_vec,
+                ));
             }
             stats.applied += 1;
         } else {
             stats.rejected += 1;
-            // A rejected move leaves the piece where it is; in the game it
-            // then falls under gravity.
-            let ghost =
-                tick::project_ghost_pos(&session.players[idx].board, session.players[idx].current);
-            session.players[idx].current.pos = ghost;
+            failing_turns.push(piece_no);
+            violations.push(format!(
+                "piece {piece_no}: host rejected the bot's placement {truth_cells_vec:?}",
+            ));
+            // A rejection means the bot's placement is not legal on the host
+            // board — a bug, not a normal outcome. Stop here rather than
+            // replaying the same rejected move forever.
+            break;
         }
 
-        let result = tick::try_lock(&mut session.players[idx]);
-        tick::post_lock(&mut session.players[idx], &result, &session.ruleset);
+        session.lock_piece(idx);
+
+        // The next piece spawns and must stay put: a bot's piece does not
+        // fall, so the board the bot plans on is the board it applies to.
+        let spawn_pos = session.players[idx].current.pos;
+        session.step_frame(GameTime::from_millis(piece_no as u64 * 16));
+        assert_eq!(
+            session.players[idx].current.pos, spawn_pos,
+            "piece {piece_no}: the bot's piece fell",
+        );
 
         println!(
-            "piece {piece_no}: in_play={} planned={} hold={} -> {}",
+            "piece {piece_no}: in_play={} planned={} hold={} -> applied",
             snap.current.kind.as_char(),
             mv.location.kind.as_char(),
             mv.hold,
-            if applied.is_some() {
-                "applied"
-            } else {
-                "rejected"
-            },
         );
     }
 
@@ -169,12 +230,12 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
 
     println!(
         "summary: pieces={piece_count} planned_for_in_play={} hold_moves={} applied={} \
-         rejected={} unreachable_requests={} violations={} failing_turns={}",
+         rejected={} illegal_placements={} violations={} failing_turns={}",
         stats.planned_for_in_play,
         stats.hold_moves,
         stats.applied,
         stats.rejected,
-        stats.unreachable_requests,
+        stats.illegal_placements,
         violations.len(),
         failing_turns.len(),
     );

@@ -53,6 +53,13 @@ pub struct Player {
     /// timestamp is older than `LOCK_DELAY_MS`.
     pub lock_grounded_at: Option<GameTime>,
     pub phase: Phase,
+    /// True for a bot-controlled player.
+    ///
+    /// Bot pieces do not fall and never auto-lock: the host applies the bot's
+    /// suggested placement and locks the piece explicitly. The piece therefore
+    /// stays where it spawned until the bot answers, which keeps the board the
+    /// bot planned on identical to the board it applies to.
+    pub bot_controlled: bool,
     pub garbage: GarbageState,
     /// Time of the last gravity shift. Used by `step_player` to decide when
     /// the active piece should fall one cell. Per-player state — each
@@ -81,6 +88,7 @@ impl Player {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
+            bot_controlled: false,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng,
@@ -105,6 +113,7 @@ impl Player {
             scoring: ScoreState::default(),
             lock_grounded_at: None,
             phase: Phase::Playing,
+            bot_controlled: true,
             garbage: GarbageState {
                 pending: Vec::new(),
                 attack_rng,
@@ -128,6 +137,12 @@ impl Player {
         };
 
         if self.phase != Phase::Playing {
+            return result;
+        }
+
+        // Bot pieces do not fall and never auto-lock. The host applies the
+        // bot's suggested placement and locks the piece itself.
+        if self.bot_controlled {
             return result;
         }
 
@@ -158,5 +173,91 @@ impl Player {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use rstest::rstest;
+    use tet_domain::Queue;
+
+    use crate::time::GameTime;
+
+    /// Deterministic RNG that cycles through 1..=1000. Same as `bag.rs`.
+    struct StubRng {
+        values: Vec<u32>,
+        idx: usize,
+    }
+
+    impl Rng for StubRng {
+        fn next_u32(&mut self) -> u32 {
+            let v = self.values[self.idx % self.values.len()];
+            self.idx += 1;
+            v
+        }
+    }
+
+    fn player(bot_controlled: bool) -> Player {
+        let mut queue = Queue::new(
+            Box::new(StubRng {
+                values: (1..=1000).collect(),
+                idx: 0,
+            }),
+            5,
+        );
+        let current = Piece::spawn(queue.take());
+        Player {
+            board: Board::new(10, 25),
+            current,
+            queue,
+            hold: None,
+            hold_used: false,
+            scoring: ScoreState::default(),
+            lock_grounded_at: None,
+            phase: Phase::Playing,
+            bot_controlled,
+            garbage: GarbageState {
+                pending: Vec::new(),
+                attack_rng: Box::new(StubRng {
+                    values: (1..=1000).collect(),
+                    idx: 0,
+                }),
+            },
+            last_gravity_at: GameTime::ZERO,
+        }
+    }
+
+    /// A bot's piece must not fall: the board the bot plans on has to be the
+    /// board it applies to.
+    #[rstest]
+    fn bot_piece_does_not_fall() {
+        let mut p = player(true);
+        let spawn = p.current.pos;
+        // Well past the gravity interval (1 s) and the lock delay (500 ms).
+        p.step_player(&Ruleset::guideline(), GameTime::from_millis(5_000));
+        assert_eq!(p.current.pos, spawn);
+    }
+
+    /// A bot's piece must not auto-lock either — the host locks it when it
+    /// applies the bot's move.
+    #[rstest]
+    fn bot_piece_does_not_auto_lock() {
+        let mut p = player(true);
+        // Ground the piece so the lock timer would start.
+        p.current.pos = tet_domain::Vec2::new(3, -1);
+        let result = p.step_player(&Ruleset::guideline(), GameTime::from_millis(5_000));
+        assert!(!result.piece_locked);
+        assert_eq!(p.current.pos, tet_domain::Vec2::new(3, -1));
+    }
+
+    /// A human's piece still falls.
+    #[rstest]
+    fn human_piece_falls() {
+        let mut p = player(false);
+        let spawn = p.current.pos;
+        p.step_player(&Ruleset::guideline(), GameTime::from_millis(5_000));
+        assert_eq!(p.current.pos, spawn + tet_domain::Vec2::new(0, -1));
     }
 }

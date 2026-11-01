@@ -178,11 +178,10 @@ async fn main() {
         });
         for (idx, moves) in completed {
             for mv in moves {
-                if session::apply_bot_move(&mut session.players[idx], mv, &session.ruleset)
-                    .is_some()
-                {
-                    let result = tick::try_lock(&mut session.players[idx]);
-                    tick::post_lock(&mut session.players[idx], &result, &session.ruleset);
+                if session::apply_bot_move(&mut session.players[idx], mv).is_some() {
+                    // Lock through the session so a line clear attacks the
+                    // opponents.
+                    session.lock_piece(idx);
                     break;
                 }
             }
