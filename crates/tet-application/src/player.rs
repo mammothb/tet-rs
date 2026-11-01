@@ -21,12 +21,15 @@ pub struct ScoreState {
 }
 
 /// Garbage that has been launched at this player but not yet inserted.
-/// `arrives_at` is the `GameTime` at which the rows are pushed on to the board.
+///
+/// Garbage is queued: it lands on the player's next lock that does **not**
+/// clear lines. A lock that clears lines cancels rows from this queue instead.
 #[derive(Clone, Copy)]
 pub struct PendingGarbage {
+    /// Number of rows in this attack.
     pub count: u8,
+    /// Column left open in each of those rows.
     pub hole: u8,
-    pub arrives_at: GameTime,
 }
 
 /// In-flight garbage queue and the RNG for attack hole column selection
