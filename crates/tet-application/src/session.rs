@@ -173,8 +173,9 @@ pub fn apply_bot_move(player: &mut Player, mv: BotMove, ruleset: &Ruleset) -> Op
         tick::try_hold(player);
     }
 
-    // 1. Convert TBP true-rotation-center → bbox-anchor position.
-    //    `MinoType::tbp_center_for` is a static lookup in the domain.
+    // 1. Convert the bot's rotation-center position → bbox-anchor position.
+    //    `MinoType::rotation_center_offset` is the domain's implementation of
+    //    the rotation-center convention (see `ports::bot::BotPieceLocation`).
     let center = MinoType::rotation_center_offset(mv.location.kind, mv.location.orientation);
     let pos = v2![mv.location.x, mv.location.y] - center;
 

@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
+use std::iter;
+
 use async_trait::async_trait;
 use tet_application::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport, PlayerSnapshot};
 use tet_domain::{Board, Cell, MinoType, Orientation, Ruleset};
@@ -103,9 +105,19 @@ fn to_bf_color(kind: MinoType) -> blockfish::Color {
     blockfish::Color::try_from(kind.as_char()).expect("mino always map to alphabet")
 }
 
+/// Pack a player snapshot into the format blockfish's search expects.
+///
+/// **Queue convention.** Blockfish's `Snapshot.queue[0]` is the piece being
+/// placed *right now*; `queue[1..]` are the previews. Tet-rs's
+/// `PlayerSnapshot.queue` is the preview queue — the piece in play has
+/// already been taken out of it — so the piece in play is prepended here.
+/// Skipping this shifts the whole plan by one piece.
 fn to_bf_snapshot(snapshot: &PlayerSnapshot) -> blockfish::Snapshot {
     let hold = snapshot.hold.map(to_bf_color);
-    let queue = snapshot.queue.iter().copied().map(to_bf_color).collect();
+    let queue = iter::once(snapshot.current.kind)
+        .chain(snapshot.queue.iter().copied())
+        .map(to_bf_color)
+        .collect();
     let matrix = to_bf_matrix(&snapshot.board);
     blockfish::Snapshot {
         hold,
@@ -135,5 +147,64 @@ fn to_tet_orientation(orientation: blockfish::Orientation) -> Orientation {
         blockfish::Orientation::R1 => Orientation::East,
         blockfish::Orientation::R2 => Orientation::South,
         blockfish::Orientation::R3 => Orientation::West,
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use tet_application::{Phase, Piece, PlayerSnapshot};
+    use tet_domain::Board;
+
+    fn snapshot(current: MinoType, queue: Vec<MinoType>, hold: Option<MinoType>) -> PlayerSnapshot {
+        PlayerSnapshot {
+            board: Board::new(10, 25),
+            queue,
+            hold,
+            combo: 0,
+            b2b: false,
+            current: Piece::spawn(current),
+            phase: Phase::Playing,
+            pending_garbage: vec![],
+        }
+    }
+
+    /// Blockfish's `queue[0]` is the piece being placed now, so the piece in
+    /// play has to lead the queue — tet-rs's snapshot queue excludes it.
+    #[test]
+    fn to_bf_snapshot_puts_the_piece_in_play_first() {
+        let snap = snapshot(
+            MinoType::S,
+            vec![MinoType::T, MinoType::I],
+            Some(MinoType::O),
+        );
+        let bf = to_bf_snapshot(&snap);
+        let queue: Vec<char> = bf.queue.iter().map(blockfish::Color::as_char).collect();
+        assert_eq!(queue, vec!['S', 'T', 'I']);
+        assert_eq!(bf.hold.map(|c| c.as_char()), Some('O'));
+    }
+
+    /// Same, with an empty hold slot: the piece in play still leads.
+    #[test]
+    fn to_bf_snapshot_puts_the_piece_in_play_first_without_hold() {
+        let snap = snapshot(MinoType::L, vec![MinoType::J, MinoType::Z], None);
+        let bf = to_bf_snapshot(&snap);
+        let queue: Vec<char> = bf.queue.iter().map(blockfish::Color::as_char).collect();
+        assert_eq!(queue, vec!['L', 'J', 'Z']);
+        assert!(bf.hold.is_none());
+    }
+
+    /// The matrix is the board without the piece in play (blockfish places
+    /// that piece itself), so the board must be copied verbatim.
+    #[test]
+    fn to_bf_snapshot_copies_the_board() {
+        let mut snap = snapshot(MinoType::T, vec![], None);
+        snap.board
+            .set(tet_domain::Vec2::new(3, 0), Cell::Block(MinoType::I));
+        let bf = to_bf_snapshot(&snap);
+        assert_eq!(bf.matrix.cols(), 10);
+        assert!(bf.matrix.get((0, 3)));
+        assert!(!bf.matrix.get((0, 4)));
     }
 }
