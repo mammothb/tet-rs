@@ -12,18 +12,25 @@
 //!   play after the move: the piece currently in play, or — when the bot asks
 //!   for a hold — the piece the hold brings up (the held piece, or the next
 //!   queue piece when the hold slot is empty).
+//! * **INV-2** the placement is a legal resting position on the host board:
+//!   its cells do not overlap the stack and the piece cannot fall another row.
 //! * **INV-3** the cells the host locks are the cells *blockfish* placed — not
 //!   the cells the host understood the bot to mean. The ground truth is
 //!   recomputed here with an independent snapshot build and search, so this
 //!   covers the whole adapter pipeline: snapshot construction, the search,
 //!   the placement reconstruction and the coordinate conversion.
+//! * **INV-4** the board the bot planned on is the board the host has: the
+//!   host board must not change between the snapshot and the apply. Nothing
+//!   may land under the bot while it thinks.
 //!
 //! The per-piece `println!` trace and the summary counters are for humans;
 //! pass/fail comes from the assertions at the end of the run.
 
 use std::collections::HashSet;
 
-use tet_application::{BotTransport, GameSession, GameTime, Player, PlayerSnapshot, session};
+use tet_application::{
+    BotTransport, GameSession, GameTime, Input, Phase, Player, PlayerSnapshot, session,
+};
 use tet_domain::{Cell, Ruleset, Vec2};
 use tet_infrastructure::SmallRng;
 use tet_infrastructure::bot::blockfish::BlockfishBot;
@@ -58,6 +65,53 @@ struct Stats {
     rejected: usize,
     /// Turns where the bot's placement overlapped the stack.
     illegal_placements: usize,
+}
+
+/// Hash of a board's contents, to detect any change to it.
+fn board_hash(board: &tet_domain::Board) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for row in board.rows() {
+        for cell in row {
+            let value = match cell {
+                Cell::Empty => 0u8,
+                Cell::Garbage => 1,
+                Cell::Block(kind) => 2 + kind.as_char() as u8,
+            };
+            hash ^= u64::from(value);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+/// Height of the tallest occupied column.
+fn stack_height(board: &tet_domain::Board) -> usize {
+    board
+        .rows()
+        .enumerate()
+        .filter(|(_, row)| row.iter().any(|c| *c != Cell::Empty))
+        .map(|(y, _)| y + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The trivial baseline: hard-drop every piece in its spawn column.
+///
+/// It survives only as long as that column can hold pieces, which is the
+/// yardstick the bot has to beat.
+fn baseline_pieces_survived() -> usize {
+    let mut session = GameSession::new(Ruleset::guideline());
+    let (_, queue_rng) = SmallRng::new(Some(42));
+    let (_, attack_rng) = SmallRng::new(Some(43));
+    let idx = session.add_player(Player::new_bot(Box::new(queue_rng), Box::new(attack_rng)));
+
+    for piece_no in 0..LONG_PIECES {
+        session.apply_input(idx, Input::HardDrop, GameTime::ZERO);
+        if session.players[idx].phase == Phase::GameOver {
+            return piece_no;
+        }
+    }
+    LONG_PIECES
 }
 
 /// Blockfish's snapshot for a player state, rebuilt independently of the
@@ -178,11 +232,37 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
 
         let truth_cells_vec: Vec<Vec2> =
             truth_cells.iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+
+        // INV-2: the placement must be a legal resting position — it does
+        // not overlap the stack, and the piece cannot fall another row.
         if session.players[idx].board.collides(&truth_cells_vec) {
             stats.illegal_placements += 1;
+            failing_turns.push(piece_no);
+            violations.push(format!(
+                "piece {piece_no}: bot's placement {truth_cells_vec:?} overlaps the stack",
+            ));
+        } else {
+            let one_row_down: Vec<Vec2> = truth_cells_vec
+                .iter()
+                .map(|c| Vec2::new(c.x, c.y - 1))
+                .collect();
+            if !session.players[idx].board.collides(&one_row_down) {
+                failing_turns.push(piece_no);
+                violations.push(format!(
+                    "piece {piece_no}: bot's placement {truth_cells_vec:?} is not resting",
+                ));
+            }
         }
 
+        // INV-4: the board the bot planned on is the board the host has.
+        // Nothing may land under the bot while it thinks.
         let applied = session::apply_bot_move(&mut session.players[idx], mv);
+        if board_hash(&session.players[idx].board) != board_hash(&snap.board) {
+            failing_turns.push(piece_no);
+            violations.push(format!(
+                "piece {piece_no}: the board changed while the bot was thinking",
+            ));
+        }
         if let Some(piece) = applied {
             // INV-3: the locked cells are the cells blockfish placed.
             if cell_set(piece) != truth_cells {
@@ -228,9 +308,14 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
     failing_turns.sort_unstable();
     failing_turns.dedup();
 
+    // Sanity: the bot must beat the trivial baseline — dropping every piece
+    // in the spawn column, which top-outs long before the bot does.
+    let baseline = baseline_pieces_survived();
+    let height = stack_height(&session.players[idx].board);
     println!(
         "summary: pieces={piece_count} planned_for_in_play={} hold_moves={} applied={} \
-         rejected={} illegal_placements={} violations={} failing_turns={}",
+         rejected={} illegal_placements={} violations={} failing_turns={} \
+         stack_height={height} baseline_survived={baseline}",
         stats.planned_for_in_play,
         stats.hold_moves,
         stats.applied,
@@ -246,6 +331,13 @@ async fn run(piece_count: usize, config: blockfish::Config) -> Stats {
         violations.len(),
         failing_turns.len(),
         violations.join("\n"),
+    );
+
+    assert!(
+        stats.applied >= baseline,
+        "bot placed {} pieces but the trivial baseline only survives {}",
+        stats.applied,
+        baseline,
     );
 
     stats
