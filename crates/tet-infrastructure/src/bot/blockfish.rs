@@ -11,10 +11,22 @@ pub struct BlockfishBot {
 }
 
 impl BlockfishBot {
+    /// Bot with the default search configuration.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_config(blockfish::Config::default())
+    }
+
+    /// Bot with an explicit search configuration.
+    ///
+    /// The search cost is dominated by `config.search_limit` (number of B*
+    /// nodes). The default (50 000) costs ~87 ms per suggestion in a release
+    /// build and ~1.6 s in a debug build, so tests should pass a smaller
+    /// limit to stay fast.
+    #[must_use]
+    pub fn with_config(config: blockfish::Config) -> Self {
         Self {
-            config: blockfish::Config::default(),
+            config,
             shape_table: blockfish::srs(),
             snapshot: None,
         }
