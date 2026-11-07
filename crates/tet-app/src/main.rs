@@ -1,7 +1,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 #![windows_subsystem = "windows"]
 
-mod bot_worker;
+mod bot;
 mod display;
 mod input;
 mod settings;
@@ -9,6 +9,11 @@ mod timer;
 
 use std::{path::Path, process, time::Instant};
 
+use crate::bot::{BotRuntime, spawn_bot_worker};
+use crate::display::{parse_grid_style, resolve_skin_path};
+use crate::input::{ControlKeys, collect_input_state};
+use crate::settings::{ControlSettings, Settings};
+use crate::timer::Timer;
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
@@ -17,13 +22,6 @@ use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
-use tokio::sync::oneshot;
-
-use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest, spawn_bot_worker};
-use crate::display::{parse_grid_style, resolve_skin_path};
-use crate::input::{ControlKeys, collect_input_state};
-use crate::settings::{ControlSettings, Settings};
-use crate::timer::Timer;
 
 /// Compose a `Frame` from the current session state. Each player gets a
 /// `PlayerView` with a layout positioned side-by-side across the screen.
@@ -102,7 +100,7 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let mut bot_handles: Vec<(usize, BotHandle)> = Vec::new();
+    let mut bot_runtimes: Vec<BotRuntime> = Vec::new();
 
     let bf_bot = Box::new(BlockfishBot::new());
     let bf_bot_handle = spawn_bot_worker(runtime.handle(), bf_bot);
@@ -112,9 +110,7 @@ async fn main() {
         Box::new(bf_bot_queue_rng),
         Box::new(bf_bot_attack_rng),
     ));
-    bot_handles.push((bf_bot_idx, bf_bot_handle));
-
-    let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
+    bot_runtimes.push(BotRuntime::new(bf_bot_idx, bf_bot_handle));
     let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
@@ -132,12 +128,10 @@ async fn main() {
         last_frame_at = Instant::now();
 
         // Drain any pending bot responses (non-blocking)
-        for (session_idx, handle) in &bot_handles {
-            while let Ok(resp) = handle.resp_rx.lock().unwrap().try_recv() {
-                match resp {
-                    BotResponse::Ack => {}
-                    BotResponse::Error(e) => tracing::warn!("bot {session_idx} error: {e}"),
-                }
+        for runtime in &mut bot_runtimes {
+            let session_idx = runtime.player_idx();
+            for error in runtime.drain_worker_errors() {
+                tracing::warn!("bot {session_idx} error: {error}");
             }
         }
 
@@ -156,42 +150,38 @@ async fn main() {
         session.step_frame(now);
 
         // For each bot: send update + suggest (non-blocking)
-        for (session_idx, handle) in &bot_handles {
-            if !pending_suggests
-                .iter()
-                .any(|(idx, _, _)| idx == session_idx)
-            {
-                let snap = session.snapshot(*session_idx);
-                handle.req_tx.send(BotRequest::Update(snap)).ok();
-                let (reply_tx, reply_rx) = oneshot::channel();
-                handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
-                // Remember when the request went out, so the age of the
-                // answer is visible.
-                pending_suggests.push((*session_idx, now, reply_rx));
+        for runtime in &mut bot_runtimes {
+            if runtime.is_idle() {
+                let snap = session.snapshot(runtime.player_idx());
+                runtime.request_suggestion(snap, now);
             }
         }
 
         // Apply any completed bot moves
         let mut completed = Vec::new();
-        pending_suggests.retain_mut(|(idx, sent_at, rx)| match rx.try_recv() {
-            Ok(Ok(moves)) => {
-                let age_ms = now.saturating_millis_since(*sent_at);
-                tracing::debug!(
-                    target: "bot",
-                    player = idx,
-                    age_ms,
-                    "bot suggestion received",
-                );
-                completed.push((*idx, moves));
-                false
+        for runtime in &mut bot_runtimes {
+            if let Some((sent_at, result)) = runtime.poll_suggestion() {
+                completed.push((runtime.player_idx(), sent_at, result));
             }
-            Ok(Err(err)) => {
-                eprintln!("{err}");
-                false
-            }
-            Err(_) => true,
-        });
-        for (idx, moves) in completed {
+        }
+        for (idx, sent_at, result) in completed {
+            let moves = match result {
+                Ok(moves) => {
+                    let age_ms = now.saturating_millis_since(sent_at);
+                    tracing::debug!(
+                        target: "bot",
+                        player = idx,
+                        age_ms,
+                        "bot suggestion received",
+                    );
+                    moves
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    continue;
+                }
+            };
+
             for mv in moves {
                 match session::apply_bot_move(&mut session.players[idx], mv) {
                     Some(piece) => {
@@ -229,8 +219,8 @@ async fn main() {
 
         // Game-over cleanup
         if session.is_finished() {
-            for (_, handle) in &bot_handles {
-                let _ = handle.req_tx.send(BotRequest::Stop);
+            for runtime in &mut bot_runtimes {
+                runtime.stop();
             }
             break;
         }

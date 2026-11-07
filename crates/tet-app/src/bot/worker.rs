@@ -5,55 +5,67 @@
 //! `BotTransport` API. The main thread communicates via channels and never
 //! blocks on bot computation.
 
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Mutex, mpsc};
 
-use tet_application::{BotError, BotMove, BotTransport, GameTime, PlayerSnapshot};
+use tet_application::{BotError, BotMove, BotTransport, PlayerSnapshot};
 use tokio::sync::{mpsc as tmpsc, oneshot};
 
-/// Send requests to a bot's worker. Cloning is cheap (channel senders clone).
-#[derive(Clone)]
-#[allow(dead_code)] // Fields used by main.rs; suppress scaffold warnings.
-pub struct BotHandle {
+/// Handle to one bot worker.
+pub(crate) struct BotHandle {
     /// Sending a request is non-blocking (channel is unbounded).
-    pub req_tx: tmpsc::UnboundedSender<BotRequest>,
+    req_tx: tmpsc::UnboundedSender<BotRequest>,
     /// Receiving a response is sync — the main thread polls each frame.
-    /// Wrapped in `Arc<Mutex<_>>` so `BotHandle: Clone` works.
-    pub resp_rx: Arc<Mutex<mpsc::Receiver<BotResponse>>>,
+    resp_rx: Mutex<mpsc::Receiver<BotResponse>>,
 }
 
 /// Requests sent from the main thread to a bot's worker.
-#[allow(dead_code)] // Variants used by main.rs; suppress scaffold warnings.
-pub enum BotRequest {
+enum BotRequest {
     Update(PlayerSnapshot),
     Suggest(oneshot::Sender<Result<Vec<BotMove>, BotError>>),
     Stop,
 }
 
-/// Responses from a bot's worker (Suggest replies go via `oneshot`, not here).
-#[allow(dead_code)] // Variants used by main.rs; suppress scaffold warnings.
-pub enum BotResponse {
+/// Responses from the bot's worker (Suggest replies go via `oneshot`, not here).
+enum BotResponse {
     Ack,
     Error(BotError),
 }
 
-/// In-flight `Suggest` reply. The receiver stays in the main thread's pending
-/// list until the worker sends through it (or we drop the slot on cleanup).
-///
-/// The `GameTime` is the game clock reading when the request went out, so the
-/// age of the answer can be logged. Game time, not frames: the render loop is
-/// not vsync-capped, so a frame count would measure the frame rate rather than
-/// the latency.
-pub type PendingSuggest = (
-    usize,
-    GameTime,
-    oneshot::Receiver<Result<Vec<BotMove>, BotError>>,
-);
+impl BotHandle {
+    /// Request one suggestion for `snapshot`.
+    pub(crate) fn request_suggestion(
+        &self,
+        snapshot: PlayerSnapshot,
+    ) -> oneshot::Receiver<Result<Vec<BotMove>, BotError>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.req_tx.send(BotRequest::Update(snapshot)).ok();
+        self.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
+        reply_rx
+    }
+
+    /// Drain worker acknowledgements and return any reported errors.
+    pub(crate) fn drain_errors(&self) -> Vec<BotError> {
+        let mut errors = Vec::new();
+        let receiver = self.resp_rx.lock().unwrap();
+        while let Ok(response) = receiver.try_recv() {
+            if let BotResponse::Error(error) = response {
+                errors.push(error);
+            }
+        }
+        errors
+    }
+
+    /// Tell the worker to stop.
+    pub(crate) fn stop(&self) {
+        self.req_tx.send(BotRequest::Stop).ok();
+    }
+}
 
 /// Spawn one worker task for an in-process bot.
 ///
 /// The bot is moved into the spawned task, which must own its data for the
 /// task's `'static` lifetime.
-pub fn spawn_bot_worker(
+pub(crate) fn spawn_bot_worker(
     runtime: &tokio::runtime::Handle,
     bot: Box<dyn BotTransport + Send>,
 ) -> BotHandle {
@@ -63,7 +75,7 @@ pub fn spawn_bot_worker(
     // Response channel: main polls `try_recv()` (sync), worker sends
     // (non-blocking). `std::sync::mpsc` because the main thread is sync.
     let (resp_tx, resp_rx) = mpsc::channel::<BotResponse>();
-    let resp_rx = Arc::new(Mutex::new(resp_rx));
+    let resp_rx = Mutex::new(resp_rx);
 
     runtime.spawn(async move {
         let mut bot = bot;
