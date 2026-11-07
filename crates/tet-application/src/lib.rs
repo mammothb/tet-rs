@@ -1,3 +1,4 @@
+pub mod bot_schedule;
 pub mod constants;
 pub mod piece;
 pub mod player;
@@ -7,11 +8,12 @@ pub mod snapshot;
 pub mod tick;
 pub mod time;
 
+pub use bot_schedule::{BotSchedule, BotSpeed, InvalidBotSpeed};
 pub use constants::{ARR_MS, DAS_MS, GRAVITY_MS, SDF_INTERVAL_MS};
 pub use piece::Piece;
 pub use player::{PendingGarbage, Phase, Player};
 pub use ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
 pub use ports::input::{Input, InputSource};
-pub use session::GameSession;
+pub use session::{GameSession, PieceLocked};
 pub use snapshot::PlayerSnapshot;
 pub use time::GameTime;

@@ -1,25 +1,23 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 #![windows_subsystem = "windows"]
 
-mod bot_worker;
+mod bot;
 mod display;
 mod input;
 mod settings;
 mod timer;
 
-use std::{path::Path, time::Instant};
+use std::{path::Path, process, time::Instant};
 
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
-use tet_infrastructure::bot::blockfish::BlockfishBot;
 use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
-use tokio::sync::oneshot;
 
-use crate::bot_worker::{BotHandle, BotRequest, BotResponse, PendingSuggest, spawn_bot_worker};
+use crate::bot::{create_runtimes, player_labels, refresh_schedules};
 use crate::display::{parse_grid_style, resolve_skin_path};
 use crate::input::{ControlKeys, collect_input_state};
 use crate::settings::{ControlSettings, Settings};
@@ -30,7 +28,7 @@ use crate::timer::Timer;
 ///
 /// Single-player for now: one view, positioned at (16, 16) with the
 /// standard guideline layout. Multi-player is a separate concern.
-fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) -> Frame {
+fn assemble_frame(session: &GameSession, base_layout: Layout, labels: &[String]) -> Frame {
     let mut views = Vec::with_capacity(session.players.len());
     // Origin starts AFTER the hold box on the left, so the hold box fits
     // on screen without overlapping the board.
@@ -43,7 +41,7 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
             origin: (ox + i as f32 * x_spacing, oy),
             ..base_layout
         };
-        let label = if i == human_idx { "human" } else { "bot" };
+        let label = labels.get(i).cloned().unwrap_or_default();
         let ghost = if matches!(snapshot.phase, tet_application::Phase::Playing) {
             Some(tick::project_ghost_pos(&snapshot.board, snapshot.current))
         } else {
@@ -73,7 +71,10 @@ async fn main() {
         .expect("build tokio runtime");
 
     // Load settings
-    let settings = Settings::load(Path::new("settings.toml"));
+    let settings = Settings::load(Path::new("settings.toml")).unwrap_or_else(|error| {
+        eprintln!("error loading settings: {error}");
+        process::exit(1);
+    });
     // Control settings
     let keys = ControlKeys::from_settings(&settings.controls).unwrap_or_else(|e| {
         eprintln!("warning: bad key binding: {e}, using defaults");
@@ -99,19 +100,7 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let mut bot_handles: Vec<(usize, BotHandle)> = Vec::new();
-
-    let bf_bot = Box::new(BlockfishBot::new());
-    let bf_bot_handle = spawn_bot_worker(runtime.handle(), bf_bot);
-    let (_, bf_bot_queue_rng) = SmallRng::new(None);
-    let (_, bf_bot_attack_rng) = SmallRng::new(None);
-    let bf_bot_idx = session.add_player(Player::new_bot(
-        Box::new(bf_bot_queue_rng),
-        Box::new(bf_bot_attack_rng),
-    ));
-    bot_handles.push((bf_bot_idx, bf_bot_handle));
-
-    let mut pending_suggests: Vec<PendingSuggest> = Vec::new();
+    let mut bot_runtimes = create_runtimes(runtime.handle(), &mut session, &settings.bots);
     let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
@@ -129,12 +118,10 @@ async fn main() {
         last_frame_at = Instant::now();
 
         // Drain any pending bot responses (non-blocking)
-        for (session_idx, handle) in &bot_handles {
-            while let Ok(resp) = handle.resp_rx.lock().unwrap().try_recv() {
-                match resp {
-                    BotResponse::Ack => {}
-                    BotResponse::Error(e) => tracing::warn!("bot {session_idx} error: {e}"),
-                }
+        for runtime in &mut bot_runtimes {
+            let session_idx = runtime.player_idx();
+            for error in runtime.drain_worker_errors() {
+                tracing::warn!("bot {session_idx} error: {error}");
             }
         }
 
@@ -152,49 +139,60 @@ async fn main() {
         // gravity timing), line-clear distribution.
         session.step_frame(now);
 
-        // For each bot: send update + suggest (non-blocking)
-        for (session_idx, handle) in &bot_handles {
-            if !pending_suggests
-                .iter()
-                .any(|(idx, _, _)| idx == session_idx)
-            {
-                let snap = session.snapshot(*session_idx);
-                handle.req_tx.send(BotRequest::Update(snap)).ok();
-                let (reply_tx, reply_rx) = oneshot::channel();
-                handle.req_tx.send(BotRequest::Suggest(reply_tx)).ok();
-                // Remember when the request went out, so the age of the
-                // answer is visible.
-                pending_suggests.push((*session_idx, now, reply_rx));
+        // Human piece locks grant turn permits. Bot locks are ignored.
+        for event in session.take_lock_events() {
+            for runtime in &mut bot_runtimes {
+                runtime.on_piece_locked(event.player_idx, human_idx);
             }
         }
 
-        // Apply any completed bot moves
-        let mut completed = Vec::new();
-        pending_suggests.retain_mut(|(idx, sent_at, rx)| match rx.try_recv() {
-            Ok(Ok(moves)) => {
-                let age_ms = now.saturating_millis_since(*sent_at);
-                tracing::debug!(
-                    target: "bot",
-                    player = idx,
-                    age_ms,
-                    "bot suggestion received",
-                );
-                completed.push((*idx, moves));
-                false
+        // Refresh fixed-speed deadlines and report missed cadence intervals.
+        refresh_schedules(&mut bot_runtimes, now);
+
+        // For each bot: start preparing the next move when idle (non-blocking)
+        for runtime in &mut bot_runtimes {
+            if runtime.is_idle() {
+                let snap = session.snapshot(runtime.player_idx());
+                runtime.request_preparation(snap, now);
             }
-            Ok(Err(err)) => {
-                eprintln!("{err}");
-                false
+        }
+
+        // Commit any permitted prepared bot moves, then prepare the next move.
+        for runtime in &mut bot_runtimes {
+            let idx = runtime.player_idx();
+
+            if let Some((sent_at, result)) = runtime.poll_calculation() {
+                match result {
+                    Ok(()) => {
+                        let age_ms = now.saturating_millis_since(sent_at);
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
+                            age_ms,
+                            "bot suggestion prepared",
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
+                }
             }
-            Err(_) => true,
-        });
-        for (idx, moves) in completed {
+
+            let Some(moves) = runtime.take_prepared_if_permitted() else {
+                continue;
+            };
+
             for mv in moves {
                 match session::apply_bot_move(&mut session.players[idx], mv) {
                     Some(piece) => {
                         tracing::debug!(
                             target: "bot",
                             player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
                             kind = %piece.kind.as_char(),
                             orientation = ?piece.orientation,
                             pos = ?piece.pos,
@@ -203,12 +201,27 @@ async fn main() {
                         // Lock through the session so a line clear attacks the
                         // opponents.
                         session.lock_piece(idx);
+                        let consumed = runtime.consume_permit();
+                        debug_assert!(consumed, "successful commit must consume a permit");
+                        if let Some(stats) = runtime.record_fixed_commit(now) {
+                            tracing::debug!(
+                                target: "bot",
+                                player = idx,
+                                bot = %runtime.name(),
+                                configured_pps = stats.configured_pps,
+                                effective_pps = stats.effective_pps,
+                                commits = stats.commits,
+                                "fixed-speed bot committed move",
+                            );
+                        }
                         break;
                     }
                     None => {
                         tracing::debug!(
                             target: "bot",
                             player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
                             kind = %mv.location.kind.as_char(),
                             orientation = ?mv.location.orientation,
                             "bot move rejected: placement collides",
@@ -216,20 +229,52 @@ async fn main() {
                     }
                 }
             }
+
+            let snap = session.snapshot(idx);
+            runtime.request_preparation(snap, now);
         }
 
         // Render via the port.
-        let frame = assemble_frame(&session, base_layout, human_idx);
+        let labels = player_labels(session.players.len(), human_idx, &bot_runtimes);
+        let frame = assemble_frame(&session, base_layout, &labels);
         renderer.render(&frame);
 
         next_frame().await;
 
         // Game-over cleanup
         if session.is_finished() {
-            for (_, handle) in &bot_handles {
-                let _ = handle.req_tx.send(BotRequest::Stop);
+            for runtime in &mut bot_runtimes {
+                runtime.stop();
             }
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_uses_provided_player_labels() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        let (_, human_queue_rng) = SmallRng::new(None);
+        let (_, human_attack_rng) = SmallRng::new(None);
+        session.add_player(Player::new_human(
+            Box::new(human_queue_rng),
+            Box::new(human_attack_rng),
+        ));
+        let (_, bot_queue_rng) = SmallRng::new(None);
+        let (_, bot_attack_rng) = SmallRng::new(None);
+        session.add_player(Player::new_bot(
+            Box::new(bot_queue_rng),
+            Box::new(bot_attack_rng),
+        ));
+        let labels = vec!["human".to_owned(), "Fast Fish".to_owned()];
+
+        let frame = assemble_frame(&session, Layout::default(), &labels);
+
+        assert_eq!(frame.views[0].label, "human");
+        assert_eq!(frame.views[1].label, "Fast Fish");
     }
 }

@@ -97,7 +97,7 @@ impl Player {
         }
     }
 
-    /// Build a new bot-controlled player with the given `BotTransport`.
+    /// Build a new bot-controlled player.
     /// Same two-RNG split as `new_human`. Active piece is drawn from the
     /// queue (first bag piece).
     #[must_use]

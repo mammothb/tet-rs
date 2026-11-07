@@ -15,7 +15,7 @@ pub struct Frame {
 
 pub struct PlayerView {
     pub snapshot: PlayerSnapshot,
-    pub label: &'static str,
+    pub label: String,
     /// Where to render this view on screen.
     pub layout: Layout,
     /// Projected landing position for the current piece (rendered with

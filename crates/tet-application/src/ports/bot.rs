@@ -6,7 +6,8 @@ use crate::PlayerSnapshot;
 /// A move a bot wants to play.
 ///
 /// `(x, y)` is the piece's **rotation center** — the pivot the piece rotates
-/// around, in the libtetris/TBP convention, not the bbox origin. The domain's
+/// around, using the game's rotation-center convention, not the bbox origin.
+/// The domain's
 /// `MinoType::rotation_center_offset` implements this convention, so the bot
 /// that produces a move and the host that consumes it agree on the pivot.
 #[derive(Clone, Copy, Debug)]

@@ -680,6 +680,7 @@ dependencies = [
 name = "tet-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "fs-err",
  "macroquad",
  "rstest",
@@ -687,6 +688,7 @@ dependencies = [
  "tet-application",
  "tet-domain",
  "tet-infrastructure",
+ "thiserror 2.0.21",
  "tokio",
  "toml",
  "tracing",
