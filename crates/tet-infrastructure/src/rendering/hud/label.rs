@@ -1,5 +1,4 @@
-//! Player label above the queue column (e.g. "human", "bot", or
-//! a TBP-supplied name).
+//! Player label above the queue column (e.g. "human", "bot", or a custom name).
 #![allow(clippy::cast_precision_loss)]
 
 use crate::rendering::backend::canvas::{Canvas, FontWeight, PaletteKey};

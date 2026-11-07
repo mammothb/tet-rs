@@ -1,9 +1,9 @@
 //! Bot worker plumbing.
 //!
-//! Spawns one bot subprocess per call and translates between the session's
-//! high-level commands (`Update`, `Suggest`, `Stop`) and the bot's TBP
-//! protocol. Each worker runs on a tokio task; the main thread communicates
-//! via channels and never blocks on bot I/O.
+//! Runs each in-process bot on a Tokio task and translates between the
+//! session's high-level commands (`Update`, `Suggest`, `Stop`) and the bot's
+//! `BotTransport` API. The main thread communicates via channels and never
+//! blocks on bot computation.
 
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -49,10 +49,10 @@ pub type PendingSuggest = (
     oneshot::Receiver<Result<Vec<BotMove>, BotError>>,
 );
 
-/// Spawn one worker task per bot.
+/// Spawn one worker task for an in-process bot.
 ///
-/// `bot_path: PathBuf` (owned) because the spawned async task is `'static`
-/// — it must own all its captured data, no borrows from the caller.
+/// The bot is moved into the spawned task, which must own its data for the
+/// task's `'static` lifetime.
 pub fn spawn_bot_worker(
     runtime: &tokio::runtime::Handle,
     bot: Box<dyn BotTransport + Send>,
