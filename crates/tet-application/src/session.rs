@@ -9,10 +9,17 @@ use crate::snapshot::PlayerSnapshot;
 use crate::tick::{self, TickResult};
 use crate::time::GameTime;
 
+/// A piece was locked by a player.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PieceLocked {
+    pub player_idx: usize,
+}
+
 pub struct GameSession {
     pub players: Vec<Player>,
     pub ruleset: Ruleset,
     pub frame: u64,
+    lock_events: Vec<PieceLocked>,
 }
 
 impl GameSession {
@@ -22,6 +29,7 @@ impl GameSession {
             players: Vec::new(),
             ruleset,
             frame: 0,
+            lock_events: Vec::new(),
         }
     }
 
@@ -38,7 +46,7 @@ impl GameSession {
         self.frame += 1;
 
         let mut results = Vec::with_capacity(self.players.len());
-        for player in &mut self.players {
+        for (idx, player) in self.players.iter_mut().enumerate() {
             if player.phase != Phase::Playing {
                 results.push(TickResult::default());
                 continue;
@@ -53,6 +61,9 @@ impl GameSession {
 
             // 2. The player has cleared lines and cancelled matching rows
             //    from `pending_garbage`. We just collect the result here.
+            if r.piece_locked {
+                self.lock_events.push(PieceLocked { player_idx: idx });
+            }
             results.push(r);
         }
 
@@ -126,6 +137,12 @@ impl GameSession {
         }
     }
 
+    /// Take all pending piece-lock events, clearing the event queue.
+    #[must_use]
+    pub fn take_lock_events(&mut self) -> Vec<PieceLocked> {
+        std::mem::take(&mut self.lock_events)
+    }
+
     /// True when every player is `GameOver`.
     #[must_use]
     pub fn is_finished(&self) -> bool {
@@ -147,6 +164,7 @@ impl GameSession {
     fn finish_lock(&mut self, idx: usize, result: &TickResult) {
         tick::post_lock(&mut self.players[idx], result, &self.ruleset);
         self.distribute_attack(idx, result);
+        self.lock_events.push(PieceLocked { player_idx: idx });
     }
 
     /// Queue the attack a lock produced for every opponent.
@@ -386,6 +404,91 @@ mod test {
         assert_eq!(session.frame, 1);
         session.step_frame(GameTime::from_millis(32));
         assert_eq!(session.frame, 2);
+    }
+
+    // -------- piece-lock events --------
+
+    #[rstest]
+    fn hard_drop_emits_one_piece_locked_event() {
+        let mut session = t_session();
+        let result = session
+            .apply_input(0, Input::HardDrop, GameTime::ZERO)
+            .expect("hard drop should lock");
+        assert!(result.piece_locked);
+
+        assert_eq!(
+            session.take_lock_events(),
+            vec![PieceLocked { player_idx: 0 }]
+        );
+        assert!(session.take_lock_events().is_empty());
+    }
+
+    #[rstest]
+    fn lock_delay_auto_lock_emits_one_piece_locked_event() {
+        let mut session = t_session();
+        session.players[0].current.pos = v2![3, -1];
+        session.players[0].lock_grounded_at = Some(GameTime::from_millis(100));
+
+        session.step_frame(GameTime::from_millis(650));
+
+        assert_eq!(
+            session.take_lock_events(),
+            vec![PieceLocked { player_idx: 0 }]
+        );
+    }
+
+    #[rstest]
+    fn explicit_bot_lock_emits_one_piece_locked_event() {
+        let mut session = GameSession::new(Ruleset::guideline());
+        session.add_player(empty_player());
+        session.add_player(empty_player());
+        session.players[1].bot_controlled = true;
+
+        session.lock_piece(1);
+
+        assert_eq!(
+            session.take_lock_events(),
+            vec![PieceLocked { player_idx: 1 }]
+        );
+    }
+
+    #[rstest]
+    #[case(Input::None)]
+    #[case(Input::MoveLeft)]
+    #[case(Input::MoveRight)]
+    #[case(Input::RotateCW)]
+    #[case(Input::RotateCCW)]
+    #[case(Input::SoftDrop)]
+    #[case(Input::Hold)]
+    fn non_lock_input_emits_no_piece_locked_event(#[case] input: Input) {
+        let mut session = t_session();
+        session.apply_input(0, input, GameTime::ZERO);
+        assert!(session.take_lock_events().is_empty());
+    }
+
+    #[rstest]
+    fn rejected_bot_move_emits_no_piece_locked_event() {
+        let mut session = t_session();
+        session.players[0]
+            .board
+            .set(v2![3, 19], Cell::Block(MinoType::I));
+        let mv = bot_move(MinoType::T, Orientation::North, 4, 19);
+
+        assert!(apply_bot_move(&mut session.players[0], mv).is_none());
+        assert!(session.take_lock_events().is_empty());
+    }
+
+    #[rstest]
+    fn failed_hard_drop_emits_no_piece_locked_event() {
+        let mut session = t_session();
+        session.players[0].phase = Phase::GameOver;
+
+        assert!(
+            session
+                .apply_input(0, Input::HardDrop, GameTime::ZERO)
+                .is_none()
+        );
+        assert!(session.take_lock_events().is_empty());
     }
 
     // -------- step_frame: pending garbage --------

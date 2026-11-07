@@ -14,6 +14,6 @@ pub use piece::Piece;
 pub use player::{PendingGarbage, Phase, Player};
 pub use ports::bot::{BotError, BotMove, BotPieceLocation, BotSpin, BotTransport};
 pub use ports::input::{Input, InputSource};
-pub use session::GameSession;
+pub use session::{GameSession, PieceLocked};
 pub use snapshot::PlayerSnapshot;
 pub use time::GameTime;
