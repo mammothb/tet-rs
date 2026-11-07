@@ -12,34 +12,16 @@ use std::{path::Path, process, time::Instant};
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
-use tet_infrastructure::bot::create_bot;
 use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
 
-use crate::bot::{BotRuntime, spawn_bot_worker};
+use crate::bot::{create_runtimes, player_labels, refresh_schedules};
 use crate::display::{parse_grid_style, resolve_skin_path};
 use crate::input::{ControlKeys, collect_input_state};
-use crate::settings::{BotConfig, ControlSettings, Settings};
+use crate::settings::{ControlSettings, Settings};
 use crate::timer::Timer;
-
-fn player_labels(
-    player_count: usize,
-    human_idx: usize,
-    bot_runtimes: &[BotRuntime],
-) -> Vec<String> {
-    let mut labels = vec![String::new(); player_count];
-    if let Some(label) = labels.get_mut(human_idx) {
-        label.push_str("human");
-    }
-    for runtime in bot_runtimes {
-        if let Some(label) = labels.get_mut(runtime.player_idx()) {
-            label.push_str(runtime.name());
-        }
-    }
-    labels
-}
 
 /// Compose a `Frame` from the current session state. Each player gets a
 /// `PlayerView` with a layout positioned side-by-side across the screen.
@@ -80,53 +62,6 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, labels: &[String])
     }
 }
 
-fn refresh_bot_schedules(runtimes: &mut [BotRuntime], now: GameTime) {
-    for runtime in runtimes {
-        if runtime.refresh_schedule(now) {
-            let Some(configured_pps) = runtime.configured_pps() else {
-                continue;
-            };
-            tracing::warn!(
-                target: "bot",
-                player = runtime.player_idx(),
-                bot = %runtime.name(),
-                bot_type = runtime.bot_type().as_str(),
-                configured_pps,
-                "bot missed fixed-speed deadline",
-            );
-        }
-    }
-}
-
-fn create_bot_runtimes(
-    runtime: &tokio::runtime::Handle,
-    session: &mut GameSession,
-    configs: &[BotConfig],
-) -> Vec<BotRuntime> {
-    let mut bot_runtimes = Vec::with_capacity(configs.len());
-
-    for bot_config in configs {
-        let bot = create_bot(bot_config.bot_type);
-        let handle = spawn_bot_worker(runtime, bot);
-        let (_, queue_rng) = SmallRng::new(None);
-        let (_, attack_rng) = SmallRng::new(None);
-        let player_idx =
-            session.add_player(Player::new_bot(Box::new(queue_rng), Box::new(attack_rng)));
-        let bot_runtime = BotRuntime::new(
-            player_idx,
-            bot_config.bot_type,
-            bot_config.name.clone(),
-            bot_config.speed,
-            handle,
-            GameTime::ZERO,
-        )
-        .expect("validated bot speed should produce a schedule");
-        bot_runtimes.push(bot_runtime);
-    }
-
-    bot_runtimes
-}
-
 #[macroquad::main("tet-rs")]
 async fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -165,7 +100,7 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let mut bot_runtimes = create_bot_runtimes(runtime.handle(), &mut session, &settings.bots);
+    let mut bot_runtimes = create_runtimes(runtime.handle(), &mut session, &settings.bots);
     let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
@@ -212,7 +147,7 @@ async fn main() {
         }
 
         // Refresh fixed-speed deadlines and report missed cadence intervals.
-        refresh_bot_schedules(&mut bot_runtimes, now);
+        refresh_schedules(&mut bot_runtimes, now);
 
         // For each bot: start preparing the next move when idle (non-blocking)
         for runtime in &mut bot_runtimes {
@@ -320,73 +255,26 @@ async fn main() {
 mod tests {
     use super::*;
 
-    use tet_application::BotSpeed;
-    use tet_infrastructure::bot::BotType;
-
-    #[tokio::test]
-    async fn creates_one_runtime_and_player_per_configured_bot() {
-        let configs = vec![
-            BotConfig {
-                bot_type: BotType::Blockfish,
-                name: "One".to_owned(),
-                speed: BotSpeed::TurnBased,
-            },
-            BotConfig {
-                bot_type: BotType::Blockfish,
-                name: "Two".to_owned(),
-                speed: BotSpeed::TurnBased,
-            },
-        ];
+    #[test]
+    fn frame_uses_provided_player_labels() {
         let mut session = GameSession::new(Ruleset::guideline());
-
-        let runtimes =
-            create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &configs);
-
-        assert_eq!(runtimes.len(), 2);
-        assert_eq!(session.players.len(), 2);
-        assert_eq!(runtimes[0].player_idx(), 0);
-        assert_eq!(runtimes[1].player_idx(), 1);
-    }
-
-    #[tokio::test]
-    async fn frame_labels_use_human_and_configured_bot_names() {
-        let configs = vec![
-            BotConfig::default(),
-            BotConfig {
-                bot_type: BotType::Blockfish,
-                name: "Fast Fish".to_owned(),
-                speed: BotSpeed::TurnBased,
-            },
-        ];
-        let mut session = GameSession::new(Ruleset::guideline());
-        let (_, queue_rng) = SmallRng::new(None);
-        let (_, attack_rng) = SmallRng::new(None);
-        session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-        let runtimes =
-            create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &configs);
-
-        let labels = player_labels(session.players.len(), 0, &runtimes);
-        assert_eq!(labels, vec!["human", "Blockfish", "Fast Fish"]);
+        let (_, human_queue_rng) = SmallRng::new(None);
+        let (_, human_attack_rng) = SmallRng::new(None);
+        session.add_player(Player::new_human(
+            Box::new(human_queue_rng),
+            Box::new(human_attack_rng),
+        ));
+        let (_, bot_queue_rng) = SmallRng::new(None);
+        let (_, bot_attack_rng) = SmallRng::new(None);
+        session.add_player(Player::new_bot(
+            Box::new(bot_queue_rng),
+            Box::new(bot_attack_rng),
+        ));
+        let labels = vec!["human".to_owned(), "Fast Fish".to_owned()];
 
         let frame = assemble_frame(&session, Layout::default(), &labels);
+
         assert_eq!(frame.views[0].label, "human");
-        assert_eq!(frame.views[1].label, "Blockfish");
-        assert_eq!(frame.views[2].label, "Fast Fish");
-    }
-
-    #[tokio::test]
-    async fn unlabeled_players_keep_an_empty_label() {
-        let labels = player_labels(2, 0, &[]);
-        assert_eq!(labels, vec!["human", ""]);
-    }
-
-    #[tokio::test]
-    async fn creates_no_bot_runtimes_for_empty_roster() {
-        let mut session = GameSession::new(Ruleset::guideline());
-
-        let runtimes = create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &[]);
-
-        assert!(runtimes.is_empty());
-        assert!(session.players.is_empty());
+        assert_eq!(frame.views[1].label, "Fast Fish");
     }
 }
