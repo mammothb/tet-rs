@@ -149,32 +149,33 @@ async fn main() {
         // gravity timing), line-clear distribution.
         session.step_frame(now);
 
-        // For each bot: send update + suggest (non-blocking)
+        // For each bot: start preparing the next move when idle (non-blocking)
         for runtime in &mut bot_runtimes {
             if runtime.is_idle() {
                 let snap = session.snapshot(runtime.player_idx());
-                runtime.request_suggestion(snap, now);
+                runtime.request_preparation(snap, now);
             }
         }
 
-        // Apply any completed bot moves
-        let mut completed = Vec::new();
+        // Commit any prepared bot moves, then start preparing the next move.
         for runtime in &mut bot_runtimes {
-            if let Some((sent_at, result)) = runtime.poll_suggestion() {
-                completed.push((runtime.player_idx(), sent_at, result));
-            }
-        }
-        for (idx, sent_at, result) in completed {
+            let idx = runtime.player_idx();
+            let Some((sent_at, result)) = runtime.poll_calculation() else {
+                continue;
+            };
+
             let moves = match result {
-                Ok(moves) => {
+                Ok(()) => {
                     let age_ms = now.saturating_millis_since(sent_at);
                     tracing::debug!(
                         target: "bot",
                         player = idx,
                         age_ms,
-                        "bot suggestion received",
+                        "bot suggestion prepared",
                     );
-                    moves
+                    runtime
+                        .take_prepared()
+                        .expect("successful calculation must produce a prepared move")
                 }
                 Err(error) => {
                     eprintln!("{error}");
@@ -209,6 +210,9 @@ async fn main() {
                     }
                 }
             }
+
+            let snap = session.snapshot(idx);
+            runtime.request_preparation(snap, now);
         }
 
         // Render via the port.
