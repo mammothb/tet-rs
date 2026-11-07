@@ -8,12 +8,21 @@ use crate::bot::worker::BotHandle;
 
 type PendingCalculation = (GameTime, oneshot::Receiver<Result<Vec<BotMove>, BotError>>);
 
+/// Summary of fixed-speed commit activity.
+pub(crate) struct FixedCommitStats {
+    pub(crate) configured_pps: f32,
+    pub(crate) commits: u64,
+    pub(crate) effective_pps: f64,
+}
+
 /// Runtime state for one in-process bot.
 pub(crate) struct BotRuntime {
     player_idx: usize,
     bot_type: BotType,
     name: String,
     schedule: BotSchedule,
+    started_at: GameTime,
+    fixed_commit_count: u64,
     handle: BotHandle,
     pending_calculation: Option<PendingCalculation>,
     prepared: Option<Vec<BotMove>>,
@@ -33,6 +42,8 @@ impl BotRuntime {
             bot_type,
             name,
             schedule: BotSchedule::new(speed, now)?,
+            started_at: now,
+            fixed_commit_count: 0,
             handle,
             pending_calculation: None,
             prepared: None,
@@ -99,6 +110,37 @@ impl BotRuntime {
             return None;
         }
         self.prepared.take()
+    }
+
+    /// Refresh fixed-speed deadlines. Returns `true` when a full cadence
+    /// interval was missed.
+    pub(crate) fn refresh_schedule(&mut self, now: GameTime) -> bool {
+        self.schedule.refresh_fixed_deadline(now)
+    }
+
+    /// Configured PPS for a fixed-speed bot.
+    pub(crate) fn configured_pps(&self) -> Option<f32> {
+        match self.schedule.speed() {
+            BotSpeed::TurnBased => None,
+            BotSpeed::FixedPps { pieces_per_second } => Some(pieces_per_second),
+        }
+    }
+
+    /// Record a successful fixed-speed commit and calculate effective PPS.
+    pub(crate) fn record_fixed_commit(&mut self, now: GameTime) -> Option<FixedCommitStats> {
+        let configured_pps = self.configured_pps()?;
+        self.fixed_commit_count += 1;
+        let elapsed_secs = now.saturating_millis_since(self.started_at) as f64 / 1_000.0;
+        let effective_pps = if elapsed_secs > 0.0 {
+            self.fixed_commit_count as f64 / elapsed_secs
+        } else {
+            0.0
+        };
+        Some(FixedCommitStats {
+            configured_pps,
+            commits: self.fixed_commit_count,
+            effective_pps,
+        })
     }
 
     /// Record a piece lock and grant a turn permit when the human locked.
@@ -211,6 +253,15 @@ mod tests {
         fail_suggest: bool,
         moves: Vec<BotMove>,
     ) -> (BotRuntime, Arc<AtomicUsize>) {
+        runtime_with_speed(fail_update, fail_suggest, moves, BotSpeed::TurnBased)
+    }
+
+    fn runtime_with_speed(
+        fail_update: bool,
+        fail_suggest: bool,
+        moves: Vec<BotMove>,
+        speed: BotSpeed,
+    ) -> (BotRuntime, Arc<AtomicUsize>) {
         let update_count = Arc::new(AtomicUsize::new(0));
         let bot = StubBot {
             fail_update,
@@ -224,7 +275,7 @@ mod tests {
             7,
             BotType::Blockfish,
             "Blockfish".to_owned(),
-            BotSpeed::TurnBased,
+            speed,
             handle,
             GameTime::ZERO,
         )
@@ -343,6 +394,72 @@ mod tests {
         assert!(runtime.consume_permit());
         assert!(!runtime.has_permit());
         assert!(!runtime.consume_permit());
+    }
+
+    #[tokio::test]
+    async fn fixed_deadline_creates_permit_without_human_lock() {
+        let (mut runtime, _) = runtime_with_speed(
+            false,
+            false,
+            Vec::new(),
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+        );
+
+        assert!(!runtime.refresh_schedule(GameTime::ZERO));
+        assert!(runtime.has_permit());
+    }
+
+    #[tokio::test]
+    async fn fixed_bot_waits_for_prepared_move_without_human_lock() {
+        let (mut runtime, _) = runtime_with_speed(
+            false,
+            false,
+            vec![suggested_move()],
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+        );
+        runtime.refresh_schedule(GameTime::ZERO);
+        runtime.request_preparation(snapshot(), GameTime::ZERO);
+
+        assert!(runtime.take_prepared_if_permitted().is_none());
+        let _ = wait_for_calculation(&mut runtime).await;
+        assert!(runtime.take_prepared_if_permitted().is_some());
+    }
+
+    #[tokio::test]
+    async fn fixed_deadline_reports_full_period_miss() {
+        let (mut runtime, _) = runtime_with_speed(
+            false,
+            false,
+            Vec::new(),
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+        );
+
+        assert!(!runtime.refresh_schedule(GameTime::ZERO));
+        assert!(runtime.refresh_schedule(GameTime::from_millis(1_000)));
+    }
+
+    #[tokio::test]
+    async fn fixed_commit_reports_effective_pps() {
+        let (mut runtime, _) = runtime_with_speed(
+            false,
+            false,
+            Vec::new(),
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+        );
+
+        let stats = runtime
+            .record_fixed_commit(GameTime::from_millis(1_000))
+            .expect("fixed bot should report commit stats");
+        assert_eq!(stats.commits, 1);
+        assert!((stats.effective_pps - 1.0).abs() < f64::EPSILON);
     }
 
     #[tokio::test]

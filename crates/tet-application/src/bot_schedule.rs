@@ -68,6 +68,12 @@ impl BotSchedule {
         })
     }
 
+    /// Configured speed policy.
+    #[must_use]
+    pub fn speed(&self) -> BotSpeed {
+        self.speed
+    }
+
     /// Add one turn permit when the human locks a piece.
     ///
     /// Fixed-PPS bots ignore human locks because their deadline schedule is
@@ -83,15 +89,21 @@ impl BotSchedule {
     /// Missed deadlines collapse into at most one outstanding fixed-speed
     /// permit. The next deadline advances beyond `now`, preventing a backlog
     /// of immediate commits.
-    pub fn refresh_fixed_deadline(&mut self, now: GameTime) {
+    ///
+    /// Returns `true` when at least one full cadence interval was missed.
+    pub fn refresh_fixed_deadline(&mut self, now: GameTime) -> bool {
         let Some(mut fixed) = self.fixed else {
-            return;
+            return false;
         };
 
         if now < fixed.next_deadline {
-            return;
+            return false;
         }
 
+        let elapsed_ms = now
+            .as_millis()
+            .saturating_sub(fixed.next_deadline.as_millis());
+        let missed = elapsed_ms >= fixed.period_ms;
         self.permits = 1;
 
         // Advance past every deadline due at or before `now`. At most one
@@ -111,6 +123,7 @@ impl BotSchedule {
         }
 
         self.fixed = Some(fixed);
+        missed
     }
 
     /// Whether a permit is currently available.
@@ -139,6 +152,23 @@ mod tests {
 
     fn at(ms: u64) -> GameTime {
         GameTime::from_millis(ms)
+    }
+
+    #[test]
+    fn exposes_configured_speed() {
+        let schedule = BotSchedule::new(
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+            at(0),
+        )
+        .expect("valid speed");
+        assert_eq!(
+            schedule.speed(),
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0
+            }
+        );
     }
 
     #[test]
@@ -263,6 +293,20 @@ mod tests {
         assert!(schedule.consume_permit());
         schedule.refresh_fixed_deadline(at(1_000));
         assert!(schedule.has_permit());
+    }
+
+    #[test]
+    fn fixed_deadline_reports_when_full_period_is_missed() {
+        let mut schedule = BotSchedule::new(
+            BotSpeed::FixedPps {
+                pieces_per_second: 2.0,
+            },
+            at(0),
+        )
+        .expect("valid speed");
+
+        assert!(!schedule.refresh_fixed_deadline(at(0)));
+        assert!(schedule.refresh_fixed_deadline(at(1_000)));
     }
 
     #[test]

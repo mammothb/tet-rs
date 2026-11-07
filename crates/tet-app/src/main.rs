@@ -63,6 +63,24 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
     }
 }
 
+fn refresh_bot_schedules(runtimes: &mut [BotRuntime], now: GameTime) {
+    for runtime in runtimes {
+        if runtime.refresh_schedule(now) {
+            let Some(configured_pps) = runtime.configured_pps() else {
+                continue;
+            };
+            tracing::warn!(
+                target: "bot",
+                player = runtime.player_idx(),
+                bot = %runtime.name(),
+                bot_type = runtime.bot_type().as_str(),
+                configured_pps,
+                "bot missed fixed-speed deadline",
+            );
+        }
+    }
+}
+
 fn create_bot_runtimes(
     runtime: &tokio::runtime::Handle,
     session: &mut GameSession,
@@ -176,6 +194,9 @@ async fn main() {
             }
         }
 
+        // Refresh fixed-speed deadlines and report missed cadence intervals.
+        refresh_bot_schedules(&mut bot_runtimes, now);
+
         // For each bot: start preparing the next move when idle (non-blocking)
         for runtime in &mut bot_runtimes {
             if runtime.is_idle() {
@@ -230,6 +251,17 @@ async fn main() {
                         session.lock_piece(idx);
                         let consumed = runtime.consume_permit();
                         debug_assert!(consumed, "successful commit must consume a permit");
+                        if let Some(stats) = runtime.record_fixed_commit(now) {
+                            tracing::debug!(
+                                target: "bot",
+                                player = idx,
+                                bot = %runtime.name(),
+                                configured_pps = stats.configured_pps,
+                                effective_pps = stats.effective_pps,
+                                commits = stats.commits,
+                                "fixed-speed bot committed move",
+                            );
+                        }
                         break;
                     }
                     None => {
