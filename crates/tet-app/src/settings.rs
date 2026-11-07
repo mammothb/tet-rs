@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use tet_application::BotSpeed;
 use tet_infrastructure::bot::BotType;
 
 /// Error returned when settings cannot be loaded or validated.
@@ -45,16 +46,6 @@ pub enum BotConfigError {
         index: usize,
         pieces_per_second: f32,
     },
-}
-
-/// Speed policy for a bot.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum BotSpeed {
-    /// Commit one piece after each human piece lock.
-    TurnBased,
-    /// Commit pieces on a fixed wall-clock cadence.
-    FixedPps { pieces_per_second: f32 },
 }
 
 /// Validated bot configuration used by the composition root.
@@ -146,7 +137,14 @@ struct BotConfigFile {
     #[serde(rename = "type")]
     bot_type: String,
     name: Option<String>,
-    speed: BotSpeed,
+    speed: BotSpeedConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum BotSpeedConfig {
+    TurnBased,
+    FixedPps { pieces_per_second: f32 },
 }
 
 impl TryFrom<SettingsFile> for Settings {
@@ -194,13 +192,13 @@ fn resolve_bot_configs(configs: Vec<BotConfigFile>) -> Result<Vec<BotConfig>, Bo
             }
 
             let speed = match config.speed {
-                BotSpeed::TurnBased => BotSpeed::TurnBased,
-                BotSpeed::FixedPps { pieces_per_second }
+                BotSpeedConfig::TurnBased => BotSpeed::TurnBased,
+                BotSpeedConfig::FixedPps { pieces_per_second }
                     if pieces_per_second.is_finite() && pieces_per_second > 0.0 =>
                 {
                     BotSpeed::FixedPps { pieces_per_second }
                 }
-                BotSpeed::FixedPps { pieces_per_second } => {
+                BotSpeedConfig::FixedPps { pieces_per_second } => {
                     return Err(BotConfigError::InvalidPps {
                         index,
                         pieces_per_second,
