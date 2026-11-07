@@ -7,7 +7,7 @@ mod input;
 mod settings;
 mod timer;
 
-use std::{path::Path, time::Instant};
+use std::{path::Path, process, time::Instant};
 
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
@@ -73,7 +73,10 @@ async fn main() {
         .expect("build tokio runtime");
 
     // Load settings
-    let settings = Settings::load(Path::new("settings.toml"));
+    let settings = Settings::load(Path::new("settings.toml")).unwrap_or_else(|error| {
+        eprintln!("error loading settings: {error}");
+        process::exit(1);
+    });
     // Control settings
     let keys = ControlKeys::from_settings(&settings.controls).unwrap_or_else(|e| {
         eprintln!("warning: bad key binding: {e}, using defaults");
