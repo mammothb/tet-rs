@@ -72,7 +72,6 @@ pub struct Settings {
     pub controls: ControlSettings,
     pub timing: TimingSettings,
     pub display: DisplaySettings,
-    #[allow(dead_code)] // Consumed by config-driven roster wiring in Phase 6.
     pub bots: Vec<BotConfig>,
 }
 

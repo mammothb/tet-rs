@@ -1,4 +1,7 @@
-use tet_application::{BotError, BotMove, GameTime, PlayerSnapshot};
+use tet_application::{
+    BotError, BotMove, BotSchedule, BotSpeed, GameTime, InvalidBotSpeed, PlayerSnapshot,
+};
+use tet_infrastructure::bot::BotType;
 use tokio::sync::oneshot;
 
 use crate::bot::worker::BotHandle;
@@ -8,23 +11,44 @@ type PendingCalculation = (GameTime, oneshot::Receiver<Result<Vec<BotMove>, BotE
 /// Runtime state for one in-process bot.
 pub(crate) struct BotRuntime {
     player_idx: usize,
+    bot_type: BotType,
+    name: String,
+    schedule: BotSchedule,
     handle: BotHandle,
     pending_calculation: Option<PendingCalculation>,
     prepared: Option<Vec<BotMove>>,
 }
 
 impl BotRuntime {
-    pub(crate) fn new(player_idx: usize, handle: BotHandle) -> Self {
-        Self {
+    pub(crate) fn new(
+        player_idx: usize,
+        bot_type: BotType,
+        name: String,
+        speed: BotSpeed,
+        handle: BotHandle,
+        now: GameTime,
+    ) -> Result<Self, InvalidBotSpeed> {
+        Ok(Self {
             player_idx,
+            bot_type,
+            name,
+            schedule: BotSchedule::new(speed, now)?,
             handle,
             pending_calculation: None,
             prepared: None,
-        }
+        })
     }
 
     pub(crate) fn player_idx(&self) -> usize {
         self.player_idx
+    }
+
+    pub(crate) fn bot_type(&self) -> BotType {
+        self.bot_type
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 
     /// Whether this bot has neither a pending calculation nor a prepared move.
@@ -69,9 +93,30 @@ impl BotRuntime {
         }
     }
 
-    /// Take the prepared move, if one is ready.
-    pub(crate) fn take_prepared(&mut self) -> Option<Vec<BotMove>> {
+    /// Take the prepared move only when a movement permit is available.
+    pub(crate) fn take_prepared_if_permitted(&mut self) -> Option<Vec<BotMove>> {
+        if !self.schedule.has_permit() {
+            return None;
+        }
         self.prepared.take()
+    }
+
+    /// Record a piece lock and grant a turn permit when the human locked.
+    pub(crate) fn on_piece_locked(&mut self, player_idx: usize, human_idx: usize) {
+        if player_idx == human_idx {
+            self.schedule.on_human_piece_locked();
+        }
+    }
+
+    /// Whether this bot currently has a movement permit.
+    #[cfg(test)]
+    pub(crate) fn has_permit(&self) -> bool {
+        self.schedule.has_permit()
+    }
+
+    /// Consume one movement permit after a successful commit.
+    pub(crate) fn consume_permit(&mut self) -> bool {
+        self.schedule.consume_permit()
     }
 
     /// Drain errors reported by the worker outside the suggestion reply.
@@ -175,7 +220,16 @@ mod tests {
         };
         let handle =
             crate::bot::spawn_bot_worker(&tokio::runtime::Handle::current(), Box::new(bot));
-        (BotRuntime::new(7, handle), update_count)
+        let runtime = BotRuntime::new(
+            7,
+            BotType::Blockfish,
+            "Blockfish".to_owned(),
+            BotSpeed::TurnBased,
+            handle,
+            GameTime::ZERO,
+        )
+        .expect("valid speed");
+        (runtime, update_count)
     }
 
     async fn wait_for_calculation(runtime: &mut BotRuntime) -> (GameTime, Result<(), BotError>) {
@@ -222,8 +276,13 @@ mod tests {
         assert!(result.is_ok());
         assert!(runtime.has_prepared());
         assert!(!runtime.is_idle());
+        assert!(runtime.take_prepared_if_permitted().is_none());
+        assert!(runtime.has_prepared());
 
-        let prepared = runtime.take_prepared().expect("prepared move should exist");
+        runtime.on_piece_locked(7, 7);
+        let prepared = runtime
+            .take_prepared_if_permitted()
+            .expect("permitted prepared move should exist");
         assert_eq!(prepared.len(), 1);
         assert_eq!(prepared[0].location.kind, move_to_prepare.location.kind);
         assert_eq!(
@@ -254,12 +313,36 @@ mod tests {
         let (mut runtime, update_count) = runtime_with_moves(false, false, vec![suggested_move()]);
         runtime.request_preparation(snapshot(), GameTime::ZERO);
         let _ = wait_for_calculation(&mut runtime).await;
-        let _ = runtime.take_prepared().expect("prepared move should exist");
+        runtime.on_piece_locked(7, 7);
+        let _ = runtime
+            .take_prepared_if_permitted()
+            .expect("prepared move should exist");
 
         runtime.request_preparation(snapshot(), GameTime::ZERO);
         let _ = wait_for_calculation(&mut runtime).await;
 
         assert_eq!(update_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn bot_lock_does_not_grant_turn_permit() {
+        let (mut runtime, _) = runtime(false, false);
+
+        runtime.on_piece_locked(8, 7);
+
+        assert!(!runtime.has_permit());
+    }
+
+    #[tokio::test]
+    async fn human_lock_grants_one_consumable_turn_permit() {
+        let (mut runtime, _) = runtime(false, false);
+
+        runtime.on_piece_locked(7, 7);
+
+        assert!(runtime.has_permit());
+        assert!(runtime.consume_permit());
+        assert!(!runtime.has_permit());
+        assert!(!runtime.consume_permit());
     }
 
     #[tokio::test]

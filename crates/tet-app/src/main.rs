@@ -9,19 +9,20 @@ mod timer;
 
 use std::{path::Path, process, time::Instant};
 
-use crate::bot::{BotRuntime, spawn_bot_worker};
-use crate::display::{parse_grid_style, resolve_skin_path};
-use crate::input::{ControlKeys, collect_input_state};
-use crate::settings::{ControlSettings, Settings};
-use crate::timer::Timer;
 use macroquad::prelude::*;
 use tet_application::{GameSession, GameTime, Player, session, tick};
 use tet_domain::Ruleset;
-use tet_infrastructure::bot::blockfish::BlockfishBot;
+use tet_infrastructure::bot::create_bot;
 use tet_infrastructure::{
     Fonts, Frame, GridStyle, Layout, MacroquadCanvas, MacroquadRenderer, PlayerView, SmallRng,
     Theme,
 };
+
+use crate::bot::{BotRuntime, spawn_bot_worker};
+use crate::display::{parse_grid_style, resolve_skin_path};
+use crate::input::{ControlKeys, collect_input_state};
+use crate::settings::{BotConfig, ControlSettings, Settings};
+use crate::timer::Timer;
 
 /// Compose a `Frame` from the current session state. Each player gets a
 /// `PlayerView` with a layout positioned side-by-side across the screen.
@@ -62,6 +63,35 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
     }
 }
 
+fn create_bot_runtimes(
+    runtime: &tokio::runtime::Handle,
+    session: &mut GameSession,
+    configs: &[BotConfig],
+) -> Vec<BotRuntime> {
+    let mut bot_runtimes = Vec::with_capacity(configs.len());
+
+    for bot_config in configs {
+        let bot = create_bot(bot_config.bot_type);
+        let handle = spawn_bot_worker(runtime, bot);
+        let (_, queue_rng) = SmallRng::new(None);
+        let (_, attack_rng) = SmallRng::new(None);
+        let player_idx =
+            session.add_player(Player::new_bot(Box::new(queue_rng), Box::new(attack_rng)));
+        let bot_runtime = BotRuntime::new(
+            player_idx,
+            bot_config.bot_type,
+            bot_config.name.clone(),
+            bot_config.speed,
+            handle,
+            GameTime::ZERO,
+        )
+        .expect("validated bot speed should produce a schedule");
+        bot_runtimes.push(bot_runtime);
+    }
+
+    bot_runtimes
+}
+
 #[macroquad::main("tet-rs")]
 async fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -100,17 +130,7 @@ async fn main() {
     let (_, attack_rng) = SmallRng::new(None);
     let human_idx =
         session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
-    let mut bot_runtimes: Vec<BotRuntime> = Vec::new();
-
-    let bf_bot = Box::new(BlockfishBot::new());
-    let bf_bot_handle = spawn_bot_worker(runtime.handle(), bf_bot);
-    let (_, bf_bot_queue_rng) = SmallRng::new(None);
-    let (_, bf_bot_attack_rng) = SmallRng::new(None);
-    let bf_bot_idx = session.add_player(Player::new_bot(
-        Box::new(bf_bot_queue_rng),
-        Box::new(bf_bot_attack_rng),
-    ));
-    bot_runtimes.push(BotRuntime::new(bf_bot_idx, bf_bot_handle));
+    let mut bot_runtimes = create_bot_runtimes(runtime.handle(), &mut session, &settings.bots);
     let game_start = Instant::now();
     let mut last_frame_at = Instant::now();
 
@@ -149,6 +169,13 @@ async fn main() {
         // gravity timing), line-clear distribution.
         session.step_frame(now);
 
+        // Human piece locks grant turn permits. Bot locks are ignored.
+        for event in session.take_lock_events() {
+            for runtime in &mut bot_runtimes {
+                runtime.on_piece_locked(event.player_idx, human_idx);
+            }
+        }
+
         // For each bot: start preparing the next move when idle (non-blocking)
         for runtime in &mut bot_runtimes {
             if runtime.is_idle() {
@@ -157,30 +184,32 @@ async fn main() {
             }
         }
 
-        // Commit any prepared bot moves, then start preparing the next move.
+        // Commit any permitted prepared bot moves, then prepare the next move.
         for runtime in &mut bot_runtimes {
             let idx = runtime.player_idx();
-            let Some((sent_at, result)) = runtime.poll_calculation() else {
-                continue;
-            };
 
-            let moves = match result {
-                Ok(()) => {
-                    let age_ms = now.saturating_millis_since(sent_at);
-                    tracing::debug!(
-                        target: "bot",
-                        player = idx,
-                        age_ms,
-                        "bot suggestion prepared",
-                    );
-                    runtime
-                        .take_prepared()
-                        .expect("successful calculation must produce a prepared move")
+            if let Some((sent_at, result)) = runtime.poll_calculation() {
+                match result {
+                    Ok(()) => {
+                        let age_ms = now.saturating_millis_since(sent_at);
+                        tracing::debug!(
+                            target: "bot",
+                            player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
+                            age_ms,
+                            "bot suggestion prepared",
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
                 }
-                Err(error) => {
-                    eprintln!("{error}");
-                    continue;
-                }
+            }
+
+            let Some(moves) = runtime.take_prepared_if_permitted() else {
+                continue;
             };
 
             for mv in moves {
@@ -189,6 +218,8 @@ async fn main() {
                         tracing::debug!(
                             target: "bot",
                             player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
                             kind = %piece.kind.as_char(),
                             orientation = ?piece.orientation,
                             pos = ?piece.pos,
@@ -197,12 +228,16 @@ async fn main() {
                         // Lock through the session so a line clear attacks the
                         // opponents.
                         session.lock_piece(idx);
+                        let consumed = runtime.consume_permit();
+                        debug_assert!(consumed, "successful commit must consume a permit");
                         break;
                     }
                     None => {
                         tracing::debug!(
                             target: "bot",
                             player = idx,
+                            bot = %runtime.name(),
+                            bot_type = runtime.bot_type().as_str(),
                             kind = %mv.location.kind.as_char(),
                             orientation = ?mv.location.orientation,
                             "bot move rejected: placement collides",
@@ -228,5 +263,48 @@ async fn main() {
             }
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tet_application::BotSpeed;
+    use tet_infrastructure::bot::BotType;
+
+    #[tokio::test]
+    async fn creates_one_runtime_and_player_per_configured_bot() {
+        let configs = vec![
+            BotConfig {
+                bot_type: BotType::Blockfish,
+                name: "One".to_owned(),
+                speed: BotSpeed::TurnBased,
+            },
+            BotConfig {
+                bot_type: BotType::Blockfish,
+                name: "Two".to_owned(),
+                speed: BotSpeed::TurnBased,
+            },
+        ];
+        let mut session = GameSession::new(Ruleset::guideline());
+
+        let runtimes =
+            create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &configs);
+
+        assert_eq!(runtimes.len(), 2);
+        assert_eq!(session.players.len(), 2);
+        assert_eq!(runtimes[0].player_idx(), 0);
+        assert_eq!(runtimes[1].player_idx(), 1);
+    }
+
+    #[tokio::test]
+    async fn creates_no_bot_runtimes_for_empty_roster() {
+        let mut session = GameSession::new(Ruleset::guideline());
+
+        let runtimes = create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &[]);
+
+        assert!(runtimes.is_empty());
+        assert!(session.players.is_empty());
     }
 }
