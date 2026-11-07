@@ -24,12 +24,29 @@ use crate::input::{ControlKeys, collect_input_state};
 use crate::settings::{BotConfig, ControlSettings, Settings};
 use crate::timer::Timer;
 
+fn player_labels(
+    player_count: usize,
+    human_idx: usize,
+    bot_runtimes: &[BotRuntime],
+) -> Vec<String> {
+    let mut labels = vec![String::new(); player_count];
+    if let Some(label) = labels.get_mut(human_idx) {
+        label.push_str("human");
+    }
+    for runtime in bot_runtimes {
+        if let Some(label) = labels.get_mut(runtime.player_idx()) {
+            label.push_str(runtime.name());
+        }
+    }
+    labels
+}
+
 /// Compose a `Frame` from the current session state. Each player gets a
 /// `PlayerView` with a layout positioned side-by-side across the screen.
 ///
 /// Single-player for now: one view, positioned at (16, 16) with the
 /// standard guideline layout. Multi-player is a separate concern.
-fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) -> Frame {
+fn assemble_frame(session: &GameSession, base_layout: Layout, labels: &[String]) -> Frame {
     let mut views = Vec::with_capacity(session.players.len());
     // Origin starts AFTER the hold box on the left, so the hold box fits
     // on screen without overlapping the board.
@@ -42,7 +59,7 @@ fn assemble_frame(session: &GameSession, base_layout: Layout, human_idx: usize) 
             origin: (ox + i as f32 * x_spacing, oy),
             ..base_layout
         };
-        let label = if i == human_idx { "human" } else { "bot" };
+        let label = labels.get(i).cloned().unwrap_or_default();
         let ghost = if matches!(snapshot.phase, tet_application::Phase::Playing) {
             Some(tick::project_ghost_pos(&snapshot.board, snapshot.current))
         } else {
@@ -283,7 +300,8 @@ async fn main() {
         }
 
         // Render via the port.
-        let frame = assemble_frame(&session, base_layout, human_idx);
+        let labels = player_labels(session.players.len(), human_idx, &bot_runtimes);
+        let frame = assemble_frame(&session, base_layout, &labels);
         renderer.render(&frame);
 
         next_frame().await;
@@ -328,6 +346,38 @@ mod tests {
         assert_eq!(session.players.len(), 2);
         assert_eq!(runtimes[0].player_idx(), 0);
         assert_eq!(runtimes[1].player_idx(), 1);
+    }
+
+    #[tokio::test]
+    async fn frame_labels_use_human_and_configured_bot_names() {
+        let configs = vec![
+            BotConfig::default(),
+            BotConfig {
+                bot_type: BotType::Blockfish,
+                name: "Fast Fish".to_owned(),
+                speed: BotSpeed::TurnBased,
+            },
+        ];
+        let mut session = GameSession::new(Ruleset::guideline());
+        let (_, queue_rng) = SmallRng::new(None);
+        let (_, attack_rng) = SmallRng::new(None);
+        session.add_player(Player::new_human(Box::new(queue_rng), Box::new(attack_rng)));
+        let runtimes =
+            create_bot_runtimes(&tokio::runtime::Handle::current(), &mut session, &configs);
+
+        let labels = player_labels(session.players.len(), 0, &runtimes);
+        assert_eq!(labels, vec!["human", "Blockfish", "Fast Fish"]);
+
+        let frame = assemble_frame(&session, Layout::default(), &labels);
+        assert_eq!(frame.views[0].label, "human");
+        assert_eq!(frame.views[1].label, "Blockfish");
+        assert_eq!(frame.views[2].label, "Fast Fish");
+    }
+
+    #[tokio::test]
+    async fn unlabeled_players_keep_an_empty_label() {
+        let labels = player_labels(2, 0, &[]);
+        assert_eq!(labels, vec!["human", ""]);
     }
 
     #[tokio::test]

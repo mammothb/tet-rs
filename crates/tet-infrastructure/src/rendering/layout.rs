@@ -213,7 +213,7 @@ mod test {
                 phase: tet_application::Phase::Playing,
                 pending_garbage: vec![],
             },
-            label: "",
+            label: String::new(),
             layout,
             ghost: None,
         }

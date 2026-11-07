@@ -97,7 +97,7 @@ impl MacroquadRenderer {
         board::draw(&vp, &theme, &mut *canvas);
         piece::draw(&vp, &theme, view.ghost, &mut *canvas);
         side_panel::draw(&vp, &theme, &mut *canvas);
-        hud::draw(&vp, &theme, view.label, &mut *canvas);
+        hud::draw(&vp, &theme, &view.label, &mut *canvas);
     }
 }
 

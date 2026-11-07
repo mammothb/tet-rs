@@ -16,3 +16,8 @@ sdf_interval = 67
 grid_style = "full"
 ghost_alpha = 128
 skin = "default"
+
+[[bots]]
+type = "blockfish"
+name = "Blockfish"
+speed = { mode = "turn_based" }
